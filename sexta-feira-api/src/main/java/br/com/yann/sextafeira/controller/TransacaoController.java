@@ -1,6 +1,7 @@
 package br.com.yann.sextafeira.controller;
 
 import br.com.yann.sextafeira.domain.model.Transacao;
+import br.com.yann.sextafeira.dto.DeletePorTextoRequest;
 import br.com.yann.sextafeira.dto.NaturalLanguageTransacaoRequest;
 import br.com.yann.sextafeira.dto.NaturalLanguageTransacaoResponse;
 import br.com.yann.sextafeira.dto.ResumoMensalDTO;
@@ -62,5 +63,16 @@ public class TransacaoController {
                 transacaoSalva
         );
     }
+
+    @DeleteMapping("/ultima")
+    public Transacao removerUltima() {
+        return transacaoService.removerUltimaTransacao();
+    }
+
+    @PostMapping("/remover-por-texto")
+    public Transacao removerPorTexto(@RequestBody DeletePorTextoRequest request) {
+        return transacaoService.removerPorTexto(request.getMensagem());
+    }
+
 
 }

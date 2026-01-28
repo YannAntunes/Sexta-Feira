@@ -3,8 +3,10 @@ package br.com.yann.sextafeira.service;
 import br.com.yann.sextafeira.domain.model.CategoriaTransacao;
 import br.com.yann.sextafeira.domain.model.TipoTransacao;
 import br.com.yann.sextafeira.domain.model.Transacao;
+import br.com.yann.sextafeira.dto.IaRouterResponse;
 import br.com.yann.sextafeira.dto.IaTransacaoRequest;
 import br.com.yann.sextafeira.dto.IaTransacaoResponse;
+import br.com.yann.sextafeira.repository.TransacaoRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -51,4 +53,19 @@ public class TransacaoIaService {
 
         return transacao;
     }
+
+    public IaRouterResponse rotearMensagem(String mensagem) {
+        IaTransacaoRequest request = new IaTransacaoRequest(mensagem);
+
+        IaRouterResponse response = restTemplate.postForObject(
+                iaBaseUrl + "/ia/router",
+                request,
+                IaRouterResponse.class
+        );
+
+        if (response == null) throw new RuntimeException("Falha ao rotear mensagem na IA");
+        return response;
+    }
+
+
 }

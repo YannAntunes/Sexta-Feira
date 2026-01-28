@@ -4,6 +4,8 @@ import br.com.yann.sextafeira.domain.model.CategoriaTransacao;
 import br.com.yann.sextafeira.domain.model.TipoTransacao;
 import br.com.yann.sextafeira.domain.model.Transacao;
 import br.com.yann.sextafeira.dto.ChatResponse;
+import br.com.yann.sextafeira.dto.ConvertRequest;
+import br.com.yann.sextafeira.dto.IaRouterResponse;
 import br.com.yann.sextafeira.dto.ResumoMensalDTO;
 import br.com.yann.sextafeira.repository.TransacaoRepository;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.util.Map;
 
 @Service
 public class AssistenteService {
@@ -20,219 +23,231 @@ public class AssistenteService {
     private final TransacaoRepository transacaoRepository;
     private final TransacaoService transacaoService;
     private final OrcamentoService orcamentoService;
+    private final CurrencyService currencyService;
+    private final RelatorioService relatorioService;
 
 
     public AssistenteService(TransacaoIaService transacaoIaService,
                              TransacaoRepository transacaoRepository,
                              TransacaoService transacaoService,
-                             OrcamentoService orcamentoService) {
+                             OrcamentoService orcamentoService,
+                             CurrencyService currencyService,
+                             RelatorioService relatorioService) {
         this.transacaoIaService = transacaoIaService;
         this.transacaoRepository = transacaoRepository;
         this.transacaoService = transacaoService;
         this.orcamentoService = orcamentoService;
+        this.currencyService = currencyService;
+        this.relatorioService = relatorioService;
     }
+
 
     public ChatResponse processarMensagem(String mensagem) {
-        String lower = mensagem.toLowerCase().trim();
 
-        // 1) PERGUNTA: "quanto gastei esse mês?"
-        if (lower.contains("quanto gastei") && (lower.contains("mes") || lower.contains("mês"))) {
-            YearMonth agora = YearMonth.from(LocalDate.now());
-            ResumoMensalDTO resumo = transacaoService.calcularResumoMensal(agora.getYear(), agora.getMonthValue());
+        IaRouterResponse rota = transacaoIaService.rotearMensagem(mensagem);
+        String intent = rota.getIntent();
 
-            String resposta = String.format(
-                    "Resumo de %02d/%d: " +
-                            "- Despesas: R$ %.2f " +
-                            "- Receitas: R$ %.2f " +
-                            "- Saldo: R$ %.2f  " +
-                            "Tradução: %s",
-                    resumo.getMes(),
-                    resumo.getAno(),
-                    resumo.getTotalDespesas(),
-                    resumo.getTotalReceitas(),
-                    resumo.getSaldo(),
-                    resumo.getSaldo().signum() >= 0 ?
-                            "você está no azul, não estrague isso." :
-                            "você está no vermelho."
-            );
+        return switch (intent) {
 
-            return new ChatResponse(resposta);
-        }
+            case "ADD_TRANSACTION" -> {
+                Transacao interpretada = transacaoIaService.interpretarMensagem(mensagem);
+                Transacao salva = transacaoRepository.save(interpretada);
 
-        // 2) PERGUNTA mais geral: "como estão minhas finanças?"
-        if (lower.contains("como estao minhas financas") ||
-                lower.contains("como estão minhas finanças")) {
-
-            var agora = YearMonth.from(LocalDate.now());
-            ResumoMensalDTO resumo = transacaoService.calcularResumoMensal(
-                    agora.getYear(), agora.getMonthValue()
-            );
-
-            String resposta = String.format(
-                    "Suas finanças deste mês (%02d/%d): " +
-                            "- Despesas: R$ %.2f " +
-                            "- Receitas: R$ %.2f " +
-                            "- Saldo: R$ %.2f ",
-                    resumo.getMes(),
-                    resumo.getAno(),
-                    resumo.getTotalDespesas(),
-                    resumo.getTotalReceitas(),
-                    resumo.getSaldo()
-            );
-
-            return new ChatResponse(resposta);
-        }
-
-        // DEFINIR ORÇAMENTO: "definir orçamento de 500 para alimentação"
-        if (lower.contains("definir orçamento") || lower.contains("definir orcamento") || lower.contains("defina")) {
-            // pega primeiro número que aparecer
-            var partes = lower.replace(",", ".").split(" ");
-            java.math.BigDecimal valor = null;
-            for (String p : partes) {
-                try {
-                    valor = new java.math.BigDecimal(p);
-                    break;
-                } catch (NumberFormatException e) {
-                    // ignora
-                }
-            }
-
-            if (valor == null) {
-                return new ChatResponse("Não entendi o valor do orçamento. Pode repetir com o valor em reais?");
-            }
-
-            // categoria bem simplificada
-            CategoriaTransacao categoria = CategoriaTransacao.OUTROS;
-            if (lower.contains("alimentacao") || lower.contains("alimentação") || lower.contains("comida")) {
-                categoria = CategoriaTransacao.ALIMENTACAO;
-            } else if (lower.contains("transporte") || lower.contains("uber")) {
-                categoria = CategoriaTransacao.TRANSPORTE;
-            }
-
-            var agora = java.time.YearMonth.from(java.time.LocalDate.now());
-
-            var req = new br.com.yann.sextafeira.dto.OrcamentoRequest();
-            req.setAno(agora.getYear());
-            req.setMes(agora.getMonthValue());
-            req.setCategoria(categoria);
-            req.setValorLimite(valor);
-
-            orcamentoService.definirOrcamento(req);
-
-            String resposta = String.format(
-                    "Beleza! Defini um orçamento de R$ %.2f para %s em %02d/%d.",
-                    valor,
-                    categoria.name(),
-                    req.getMes(),
-                    req.getAno()
-            );
-
-            return new ChatResponse(resposta);
-        }
-
-        // STATUS DO ORÇAMENTO: "como está meu orçamento de alimentação?"
-        if (lower.contains("orcamento de") || lower.contains("orçamento de")) {
-
-            CategoriaTransacao categoria = CategoriaTransacao.OUTROS;
-            if (lower.contains("alimentacao") || lower.contains("alimentação") || lower.contains("comida")) {
-                categoria = CategoriaTransacao.ALIMENTACAO;
-            } else if (lower.contains("transporte") || lower.contains("uber")) {
-                categoria = CategoriaTransacao.TRANSPORTE;
-            }
-
-            var agora = java.time.YearMonth.from(java.time.LocalDate.now());
-            var status = orcamentoService.consultarStatus(
-                    agora.getYear(), agora.getMonthValue(), categoria
-            );
-
-            String categoriaFormatada = status.getCategoria().name()
-                    .toLowerCase().replace("_", " ");
-            categoriaFormatada = Character.toUpperCase(categoriaFormatada.charAt(0))
-                    + categoriaFormatada.substring(1);
-
-            String mesAno = String.format("%02d/%d", status.getMes(), status.getAno());
-
-            if (status.getLimite().compareTo(java.math.BigDecimal.ZERO) == 0) {
-                return new ChatResponse(
-                        "Você ainda não definiu um orçamento para " + categoriaFormatada +
-                                " em " + mesAno + ".\nSe a ideia é viver no modo freestyle financeiro, está funcionando. Quer que eu defina um limite?"
-                );
-            }
-
-            java.math.BigDecimal limite = status.getLimite();
-            java.math.BigDecimal gasto = status.getGasto();
-            java.math.BigDecimal restante = status.getRestante();
-
-            // porcentagem usada
-            java.math.BigDecimal perc = java.math.BigDecimal.ZERO;
-            if (limite.compareTo(java.math.BigDecimal.ZERO) > 0) {
-                perc = gasto
-                        .divide(limite, 2, java.math.RoundingMode.HALF_UP)
-                        .multiply(java.math.BigDecimal.valueOf(100));
-            }
-
-            StringBuilder resposta = new StringBuilder();
-            resposta.append(String.format(
-                    "Orçamento de %s — %s\n\n", categoriaFormatada, mesAno));
-            resposta.append(String.format(
-                    "Limite: R$ %.2f\nGasto: R$ %.2f\n", limite, gasto));
-
-            if (status.isEstourado()) {
-                java.math.BigDecimal excedente = gasto.subtract(limite);
-                resposta.append(String.format(
-                        "Você passou do limite em R$ %.2f.\n", excedente));
-                resposta.append("Resumindo: o orçamento morreu antes do mês acabar. Talvez seja hora de frear um pouco. 😉");
-            } else {
-                resposta.append(String.format(
-                        "Disponível: R$ %.2f (%.0f%% do orçamento ainda vivo).\n",
-                        restante, java.math.BigDecimal.valueOf(100).subtract(perc)));
-                if (perc.compareTo(java.math.BigDecimal.valueOf(80)) >= 0) {
-                    resposta.append("Você já usou boa parte do limite. Não é crítico ainda, mas o futuro eu pode não gostar dessas decisões.");
+                String resposta;
+                if (salva.getTipo() == TipoTransacao.RECEITA) {
+                    resposta = String.format(
+                            "Entrada registrada: +R$ %.2f em %s.\nBom ver dinheiro vindo **pra você** e não indo embora.",
+                            salva.getValor(),
+                            formatarCategoria(salva.getCategoria())
+                    );
                 } else {
-                    resposta.append("Por enquanto está sob controle. Não me dê motivos pra enviar alerta dramático.");
+                    resposta = String.format(
+                            "Gasto registrado: -R$ %.2f em %s.\nAnotado. Só não transforma isso em esporte, combinado?",
+                            salva.getValor(),
+                            formatarCategoria(salva.getCategoria())
+                    );
                 }
+
+                yield new ChatResponse(resposta);
             }
 
-            return new ChatResponse(resposta.toString());
-        }
-
-        // 3) LANÇAMENTO: "gastei", "paguei", "comprei", "recebi", "ganhei"
-        if (lower.contains("gastei") ||
-                lower.contains("paguei") ||
-                lower.contains("comprei") ||
-                lower.contains("recebi") ||
-                lower.contains("ganhei")) {
-
-            Transacao interpretada = transacaoIaService.interpretarMensagem(mensagem);
-            Transacao salva = transacaoRepository.save(interpretada);
-
-            String categoriaFormatada = salva.getCategoria().name()
-                    .toLowerCase().replace("_", " ");
-            categoriaFormatada = Character.toUpperCase(categoriaFormatada.charAt(0))
-                    + categoriaFormatada.substring(1);
-
-            String resposta;
-            if (salva.getTipo() == TipoTransacao.RECEITA) {
-                resposta = String.format(
-                        "Entrada registrada: +R$ %.2f em %s.\nBom ver dinheiro vindo **pra você** e não indo embora.",
-                        salva.getValor(),
-                        categoriaFormatada
-                );
-            } else {
-                resposta = String.format(
-                        "Gasto registrado: -R$ %.2f em %s.\nAnotado. Só não transforma isso em esporte, combinado?",
-                        salva.getValor(),
-                        categoriaFormatada
-                );
+            case "DELETE_TRANSACTION" -> {
+                Transacao removida = transacaoService.removerPorTexto(mensagem);
+                yield new ChatResponse(String.format(
+                        "Feito. Apaguei: %s de R$ %.2f em %s (%s).\n" +
+                                "Tente não transformar isso em edição de histórico. 😉",
+                        removida.getTipo().name(),
+                        removida.getValor(),
+                        formatarCategoria(removida.getCategoria()),
+                        removida.getData()
+                ));
             }
 
-            return new ChatResponse(resposta);
-        }
+            case "ASK_MONTH_SUMMARY" -> {
+                YearMonth agora = YearMonth.from(LocalDate.now());
+                ResumoMensalDTO resumo = transacaoService.calcularResumoMensal(agora.getYear(), agora.getMonthValue());
 
-        // 4) fallback
-        return new ChatResponse(
-                "Ainda não sei responder isso, mas já consigo registrar gastos/receitas e te dizer quanto você gastou no mês. 😊"
-        );
+                String traducao = resumo.getSaldo().signum() >= 0
+                        ? "você está no azul. Tenta não estragar isso."
+                        : "você está no vermelho. Não é uma vibe bonita.";
+
+                yield new ChatResponse(String.format(
+                        "Resumo %02d/%d:\n" +
+                                "- Despesas: R$ %.2f\n" +
+                                "- Receitas: R$ %.2f\n" +
+                                "- Saldo: R$ %.2f\n\n" +
+                                "Tradução: %s 😌",
+                        resumo.getMes(), resumo.getAno(),
+                        resumo.getTotalDespesas(), resumo.getTotalReceitas(), resumo.getSaldo(),
+                        traducao
+                ));
+            }
+
+            case "ASK_BUDGET_STATUS" -> {
+                // Pega categoria do texto (por enquanto simples; depois o router manda categoria)
+                CategoriaTransacao categoria = inferirCategoriaPorTexto(mensagem);
+
+                YearMonth agora = YearMonth.from(LocalDate.now());
+                var status = orcamentoService.consultarStatus(agora.getYear(), agora.getMonthValue(), categoria);
+
+                String categoriaFormatada = formatarCategoria(categoria);
+                String mesAno = String.format("%02d/%d", status.getMes(), status.getAno());
+
+                if (status.getLimite().compareTo(BigDecimal.ZERO) == 0) {
+                    yield new ChatResponse(
+                            "Você ainda não definiu um orçamento para " + categoriaFormatada + " em " + mesAno + ".\n" +
+                                    "Se a ideia é viver no modo freestyle financeiro, está funcionando. Quer que eu defina um limite? 😏"
+                    );
+                }
+
+                BigDecimal limite = status.getLimite();
+                BigDecimal gasto = status.getGasto();
+                BigDecimal restante = status.getRestante();
+
+                BigDecimal perc = BigDecimal.ZERO;
+                if (limite.compareTo(BigDecimal.ZERO) > 0) {
+                    perc = gasto.divide(limite, 2, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+                }
+
+                StringBuilder resposta = new StringBuilder();
+                resposta.append(String.format("Orçamento de %s — %s\n\n", categoriaFormatada, mesAno));
+                resposta.append(String.format("Limite: R$ %.2f\nGasto: R$ %.2f\n", limite, gasto));
+
+                if (status.isEstourado()) {
+                    BigDecimal excedente = gasto.subtract(limite);
+                    resposta.append(String.format("Excedente: R$ %.2f\n\n", excedente));
+                    resposta.append("Você estourou o orçamento. Não julgo… mas seu eu do futuro vai. 😉");
+                } else {
+                    resposta.append(String.format("Disponível: R$ %.2f\n\n", restante));
+
+                    if (perc.compareTo(BigDecimal.valueOf(80)) >= 0) {
+                        resposta.append("Você já usou boa parte do limite. Não é crítico ainda… mas eu ficaria esperta.");
+                    } else {
+                        resposta.append("Por enquanto está sob controle. Não me dê motivo pra drama.");
+                    }
+                }
+
+                yield new ChatResponse(resposta.toString());
+            }
+
+            case "CONVERT_CURRENCY" -> {
+                Map<String, Object> e = rota.getEntities();
+
+                if (e == null) {
+                    yield new ChatResponse("Você quer converter quanto e pra qual moeda? Eu não leio mentes (ainda). 😏");
+                }
+
+                Object amountObj = e.get("amount");
+                Object fromObj = e.get("from");
+                Object toObj = e.get("to");
+
+                if (amountObj == null || fromObj == null || toObj == null) {
+                    yield new ChatResponse("Faltou informação. Ex: \"converte 10 USD para BRL\". Eu facilito, você coopera. 😉");
+                }
+
+                BigDecimal amount = new BigDecimal(amountObj.toString());
+                String from = fromObj.toString();
+                String to = toObj.toString();
+
+                ConvertRequest req = new ConvertRequest();
+                req.setAmount(amount);
+                req.setFrom(from);
+                req.setTo(to);
+
+                var resp = currencyService.converter(req);
+
+                String resposta = String.format(
+                        "Converti %s %.2f → %s %.2f.\nTaxa (1 %s): %.4f (%s).\n" +
+                                "De nada. Agora tenta não gastar tudo em besteira. 😌",
+                        resp.getFrom(), resp.getAmount(),
+                        resp.getTo(), resp.getResult(),
+                        resp.getFrom(), resp.getRate(),
+                        resp.getDate()
+                );
+
+                yield new ChatResponse(resposta);
+            }
+
+            case "ASK_MONTH_REPORT" -> {
+                var rel = relatorioService.gerarRelatorioMesAtual();
+
+                StringBuilder sb = new StringBuilder();
+                sb.append(rel.getResumoTexto()).append("\n\n");
+
+                sb.append("🏷️ Top categorias:\n");
+                for (String t : rel.getTopCategorias()) {
+                    sb.append("- ").append(t).append("\n");
+                }
+                sb.append("\n");
+
+                sb.append("🚦 Alertas:\n");
+                for (String a : rel.getAlertas()) {
+                    sb.append("- ").append(a).append("\n");
+                }
+                sb.append("\n");
+
+                sb.append("📊 Gráficos:\n");
+                for (String link : rel.getLinksGraficos()) {
+                    sb.append("- ").append(link).append("\n");
+                }
+
+                sb.append("\nPronto. Agora vai lá e faz escolhas financeiras minimamente sensatas. 😌");
+
+                yield new ChatResponse(sb.toString());
+            }
+
+
+            default -> new ChatResponse("Não entendi. Reformula isso como se eu fosse uma IA milionária, por favor. 😏");
+        };
     }
+
+    private String formatarCategoria(CategoriaTransacao categoria) {
+        String s = categoria.name().toLowerCase().replace("_", " ");
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    private CategoriaTransacao inferirCategoriaPorTexto(String mensagem) {
+        String lower = mensagem.toLowerCase();
+
+        if (lower.contains("alimentacao") || lower.contains("alimentação") || lower.contains("comida") || lower.contains("mercado")) {
+            return CategoriaTransacao.ALIMENTACAO;
+        }
+        if (lower.contains("uber") || lower.contains("transporte") || lower.contains("gasolina") || lower.contains("ônibus") || lower.contains("onibus")) {
+            return CategoriaTransacao.TRANSPORTE;
+        }
+        if (lower.contains("aluguel") || lower.contains("condominio") || lower.contains("condomínio") || lower.contains("moradia")) {
+            return CategoriaTransacao.MORADIA;
+        }
+        if (lower.contains("netflix") || lower.contains("cinema") || lower.contains("lazer") || lower.contains("show")) {
+            return CategoriaTransacao.LAZER;
+        }
+        if (lower.contains("farmacia") || lower.contains("farmácia") || lower.contains("remedio") || lower.contains("remédio") || lower.contains("saude") || lower.contains("saúde")) {
+            return CategoriaTransacao.SAUDE;
+        }
+        if (lower.contains("curso") || lower.contains("faculdade") || lower.contains("educacao") || lower.contains("educação")) {
+            return CategoriaTransacao.EDUCACAO;
         }
 
+        return CategoriaTransacao.OUTROS;
+    }
+}
