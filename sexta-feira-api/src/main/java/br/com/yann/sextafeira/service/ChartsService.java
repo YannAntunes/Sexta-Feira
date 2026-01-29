@@ -108,7 +108,22 @@ public class ChartsService {
     }
 
     public List<Map.Entry<String, BigDecimal>> topCategoriasGastoMesAtual(int topN) {
-        var mapa = gastosPorCategoriaDoMesAtual(); // seu método já existe
+        var mapa = gastosPorCategoriaDoMesAtual();
         return mapa.entrySet().stream().limit(topN).toList();
+    }
+
+    public Map<String, BigDecimal> gastosPorCategoria(LocalDate inicio, LocalDate fim) {
+        List<Transacao> transacoes = transacaoRepository.findByDataBetween(inicio, fim);
+
+        Map<String, BigDecimal> soma = new HashMap<>();
+
+        for (Transacao t : transacoes) {
+            if (t.getTipo() != TipoTransacao.DESPESA) continue;
+
+            String cat = t.getCategoria().name();
+            soma.put(cat, soma.getOrDefault(cat, BigDecimal.ZERO).add(t.getValor()));
+        }
+
+        return soma;
     }
 }

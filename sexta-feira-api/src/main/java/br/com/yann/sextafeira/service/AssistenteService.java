@@ -3,10 +3,7 @@ package br.com.yann.sextafeira.service;
 import br.com.yann.sextafeira.domain.model.CategoriaTransacao;
 import br.com.yann.sextafeira.domain.model.TipoTransacao;
 import br.com.yann.sextafeira.domain.model.Transacao;
-import br.com.yann.sextafeira.dto.ChatResponse;
-import br.com.yann.sextafeira.dto.ConvertRequest;
-import br.com.yann.sextafeira.dto.IaRouterResponse;
-import br.com.yann.sextafeira.dto.ResumoMensalDTO;
+import br.com.yann.sextafeira.dto.*;
 import br.com.yann.sextafeira.repository.TransacaoRepository;
 import org.springframework.stereotype.Service;
 
@@ -25,22 +22,23 @@ public class AssistenteService {
     private final OrcamentoService orcamentoService;
     private final CurrencyService currencyService;
     private final RelatorioService relatorioService;
-
+    private final EconomiaService economiaService;
 
     public AssistenteService(TransacaoIaService transacaoIaService,
                              TransacaoRepository transacaoRepository,
                              TransacaoService transacaoService,
                              OrcamentoService orcamentoService,
                              CurrencyService currencyService,
-                             RelatorioService relatorioService) {
+                             RelatorioService relatorioService,
+                             EconomiaService economiaService) {
         this.transacaoIaService = transacaoIaService;
         this.transacaoRepository = transacaoRepository;
         this.transacaoService = transacaoService;
         this.orcamentoService = orcamentoService;
         this.currencyService = currencyService;
         this.relatorioService = relatorioService;
+        this.economiaService = economiaService;
     }
-
 
     public ChatResponse processarMensagem(String mensagem) {
 
@@ -104,7 +102,6 @@ public class AssistenteService {
             }
 
             case "ASK_BUDGET_STATUS" -> {
-                // Pega categoria do texto (por enquanto simples; depois o router manda categoria)
                 CategoriaTransacao categoria = inferirCategoriaPorTexto(mensagem);
 
                 YearMonth agora = YearMonth.from(LocalDate.now());
@@ -195,25 +192,94 @@ public class AssistenteService {
                 sb.append(rel.getResumoTexto()).append("\n\n");
 
                 sb.append("🏷️ Top categorias:\n");
-                for (String t : rel.getTopCategorias()) {
-                    sb.append("- ").append(t).append("\n");
-                }
+                for (String t : rel.getTopCategorias()) sb.append("- ").append(t).append("\n");
                 sb.append("\n");
 
                 sb.append("🚦 Alertas:\n");
-                for (String a : rel.getAlertas()) {
-                    sb.append("- ").append(a).append("\n");
-                }
+                for (String a : rel.getAlertas()) sb.append("- ").append(a).append("\n");
                 sb.append("\n");
 
                 sb.append("📊 Gráficos:\n");
-                for (String link : rel.getLinksGraficos()) {
-                    sb.append("- ").append(link).append("\n");
-                }
+                for (String link : rel.getLinksGraficos()) sb.append("- ").append(link).append("\n");
 
                 sb.append("\nPronto. Agora vai lá e faz escolhas financeiras minimamente sensatas. 😌");
 
                 yield new ChatResponse(sb.toString());
+            }
+
+            case "ASK_PERIOD_SUMMARY" -> {
+                var e = rota.getEntities();
+
+                String range = e != null && e.get("range") != null ? e.get("range").toString() : "UNSPECIFIED";
+                Integer days = null;
+                if (e != null && e.get("days") != null) {
+                    days = Integer.valueOf(e.get("days").toString());
+                }
+
+                var datas = PeriodoService.resolverRange(range, days);
+                var inicio = datas.get("inicio");
+                var fim = datas.get("fim");
+
+                var resumo = transacaoService.calcularResumoPorIntervalo(inicio, fim);
+
+                String label = switch (range) {
+                    case "TODAY" -> "hoje";
+                    case "YESTERDAY" -> "ontem";
+                    case "THIS_WEEK" -> "essa semana";
+                    case "LAST_WEEK" -> "semana passada";
+                    case "THIS_MONTH" -> "esse mês";
+                    case "LAST_MONTH" -> "mês passado";
+                    case "LAST_N_DAYS" -> "últimos " + (days == null ? 7 : days) + " dias";
+                    default -> "últimos dias";
+                };
+
+                String resposta = String.format(
+                        "📌 Resumo %s (%s → %s)\n\n" +
+                                "Despesas: R$ %.2f\nReceitas: R$ %.2f\nSaldo: R$ %.2f\n\n" +
+                                "Tradução: %s 😌",
+                        label,
+                        inicio, fim,
+                        resumo.getTotalDespesas(),
+                        resumo.getTotalReceitas(),
+                        resumo.getSaldo(),
+                        resumo.getSaldo().signum() >= 0 ? "nada pegando fogo (por enquanto)" : "você está gastando mais do que entra"
+                );
+
+                yield new ChatResponse(resposta);
+            }
+
+            case "ASK_SAVING_TIPS" ->
+                    new ChatResponse(economiaService.sugerirCortesSemana());
+
+            case "SET_BUDGET" -> {
+                var e = rota.getEntities();
+
+                if (e == null || e.get("amount") == null || e.get("category") == null) {
+                    yield new ChatResponse(
+                            "Diz direito: categoria e valor. Ex: \"orçamento de alimentação 1000 reais\". 😉"
+                    );
+                }
+
+                BigDecimal valor = new BigDecimal(e.get("amount").toString());
+                CategoriaTransacao categoria = CategoriaTransacao.valueOf(e.get("category").toString());
+
+                YearMonth ym = YearMonth.from(LocalDate.now());
+
+                OrcamentoRequest req = new OrcamentoRequest();
+                req.setAno(ym.getYear());
+                req.setMes(ym.getMonthValue());
+                req.setCategoria(categoria);
+                req.setValorLimite(valor);
+
+                orcamentoService.definirOrcamento(req);
+
+                yield new ChatResponse(String.format(
+                        "Orçamento definido.\n%s: R$ %.2f em %02d/%d.\nAgora tenta não sabotar isso em 3 dias. 😌",
+                        categoria.name(),
+                        valor,
+                        ym.getMonthValue(),
+                        ym.getYear()
+                ));
             }
 
 

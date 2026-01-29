@@ -163,6 +163,15 @@ def detectar_intencao(mensagem: str) -> str:
         "monthly report", "month report", "full report", "report this month"
     ]):
         return "ASK_MONTH_REPORT"
+    
+        # SET BUDGET 
+    if any(x in m_low for x in [
+        "definir", "define", "defina",
+        "ajustar", "ajusta", "ajuste",
+        "colocar", "coloca", "coloque",
+        "setar", "set"
+    ]) and any(x in m_low for x in ["orçamento", "orcamento", "budget"]):
+        return "SET_BUDGET"
 
     if any(x in m_low for x in [
         "meu orçamento", "meu orcamento",
@@ -171,14 +180,41 @@ def detectar_intencao(mensagem: str) -> str:
     ]):
         return "ASK_BUDGET_STATUS"
 
-    if any(x in m_low for x in ["definir", "set", "criar", "colocar"]) and \
-       any(x in m_low for x in ["orçamento", "orcamento", "budget"]):
-        return "SET_BUDGET"
-
     if ("para" in m_low or "to" in m_low) and any(x in m_low for x in [
         "dólar", "dolar", "usd", "euro", "eur", "real", "brl", "convert", "converter", "converte"
     ]):
         return "CONVERT_CURRENCY"
+    
+        # PERIOD REPORT (gastos por período)
+    if any(x in m_low for x in [
+        "gastos de", "quanto gastei", "quanto eu gastei", "gastei quanto",
+        "últimos", "last", "essa semana", "esta semana", "semana passada",
+        "hoje", "ontem", "this week", "yesterday", "today"
+    ]):
+        # cuidado: não roubar do relatório mensal completo
+        if "relatório" not in m_low and "relatorio" not in m_low:
+            return "ASK_PERIOD_SUMMARY"
+        
+        # SAVING TIPS
+    if any(x in m_low for x in [
+        "economizar", "economia", "cortar gastos", "reduzir gastos",
+        "onde dá pra economizar", "como economizar", "dicas de economia",
+        "saving tips", "how can i save", "cut expenses"
+    ]):
+        return "ASK_SAVING_TIPS"
+    
+    if intent == "SET_BUDGET":
+        amount = parse_amount(mensagem)
+        category = parse_budget_category(mensagem)
+
+        # fallback seguro
+        if category is None:
+            category = "OUTROS"
+
+        entities["amount"] = amount
+        entities["category"] = category
+
+
 
     return "UNKNOWN"
 
@@ -232,6 +268,70 @@ def parse_convert_entities(msg: str) -> dict:
         "to": to_cur
     }
 
+# ========= HELPERS (TIMEFRAME) =========
+
+
+def parse_last_n_days(m: str) -> int | None:
+    m_low = m.lower()
+    match = re.search(r"últimos\s+(\d+)\s+dias", m_low) or re.search(r"last\s+(\d+)\s+days", m_low)
+    if match:
+        return int(match.group(1))
+    return None
+
+def detectar_timeframe(mensagem: str) -> dict:
+    m = mensagem.lower()
+    n = parse_last_n_days(mensagem)
+    if n:
+        return {"range": "LAST_N_DAYS", "days": n}
+
+    if "ontem" in m or "yesterday" in m:
+        return {"range": "YESTERDAY"}
+    if "hoje" in m or "today" in m:
+        return {"range": "TODAY"}
+    if "essa semana" in m or "esta semana" in m or "this week" in m:
+        return {"range": "THIS_WEEK"}
+    if "semana passada" in m or "last week" in m:
+        return {"range": "LAST_WEEK"}
+    if "esse mês" in m or "este mês" in m or "this month" in m:
+        return {"range": "THIS_MONTH"}
+    if "mês passado" in m or "last month" in m:
+        return {"range": "LAST_MONTH"}
+
+    return {"range": "UNSPECIFIED"}
+
+def parse_budget_entities(msg: str) -> dict:
+    m = msg.lower()
+
+    amount = parse_amount(msg)
+    category = determinar_categoria(msg)
+
+    if amount is None:
+        return {}
+
+    return {
+        "amount": amount,
+        "category": category
+    }
+
+def parse_budget_category(msg: str) -> str | None:
+    m = msg.lower()
+
+    if any(x in m for x in ["alimentacao", "alimentação", "comida", "mercado", "ifood", "restaurante", "lanche"]):
+        return "ALIMENTACAO"
+    if any(x in m for x in ["uber", "transporte", "gasolina", "onibus", "ônibus", "metro"]):
+        return "TRANSPORTE"
+    if any(x in m for x in ["aluguel", "condominio", "condomínio", "moradia"]):
+        return "MORADIA"
+    if any(x in m for x in ["netflix", "cinema", "lazer", "show"]):
+        return "LAZER"
+    if any(x in m for x in ["farmacia", "farmácia", "remedio", "remédio", "saude", "saúde", "medico", "médico"]):
+        return "SAUDE"
+    if any(x in m for x in ["curso", "faculdade", "educacao", "educação", "escola", "livro"]):
+        return "EDUCACAO"
+
+    return None
+
+
 
 # ========= ENDPOINTS =========
 
@@ -280,7 +380,15 @@ def router(request: MensagemRequest):
         conv = parse_convert_entities(mensagem)
         entities.update(conv)
 
+    if intent == "ASK_PERIOD_SUMMARY":
+        entities.update(detectar_timeframe(mensagem))
+
+    if intent == "SET_BUDGET":
+        entities.update(parse_budget_entities(mensagem))
+
+
     return RouterResponse(intent=intent, entities=entities, lang=lang)
+
 
 @app.post("/ia/charts/gastos-por-categoria")
 def chart_gastos_por_categoria(req: ChartCategoriaRequest):

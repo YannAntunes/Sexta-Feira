@@ -95,6 +95,32 @@ public class TransacaoService {
         // (opcional) você pode retornar e também devolver quantos candidatos existiam
         return escolhido;
     }
+
+    public ResumoMensalDTO calcularResumoPorIntervalo(LocalDate inicio, LocalDate fim) {
+        List<Transacao> transacoes = transacaoRepository.findByDataBetween(inicio, fim);
+
+        BigDecimal despesas = BigDecimal.ZERO;
+        BigDecimal receitas = BigDecimal.ZERO;
+
+        for (Transacao t : transacoes) {
+            if (t.getTipo() == TipoTransacao.DESPESA) {
+                despesas = despesas.add(t.getValor());
+            } else {
+                receitas = receitas.add(t.getValor());
+            }
+        }
+
+        BigDecimal saldo = receitas.subtract(despesas);
+
+        return new ResumoMensalDTO(
+                inicio.getYear(),
+                inicio.getMonthValue(),
+                despesas,
+                receitas,
+                saldo
+        );
+    }
+
 }
 
 
