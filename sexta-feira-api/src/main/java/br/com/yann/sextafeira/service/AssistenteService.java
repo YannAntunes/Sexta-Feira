@@ -1,6 +1,7 @@
 package br.com.yann.sextafeira.service;
 
 import br.com.yann.sextafeira.domain.model.CategoriaTransacao;
+import br.com.yann.sextafeira.domain.model.ClasseAtivo;
 import br.com.yann.sextafeira.domain.model.TipoTransacao;
 import br.com.yann.sextafeira.domain.model.Transacao;
 import br.com.yann.sextafeira.dto.*;
@@ -23,6 +24,9 @@ public class AssistenteService {
     private final CurrencyService currencyService;
     private final RelatorioService relatorioService;
     private final EconomiaService economiaService;
+    private final FrasesService frasesService;
+    private final CarteiraRelatorioService carteiraRelatorioService;
+    private final CarteiraService carteiraService;
 
     public AssistenteService(TransacaoIaService transacaoIaService,
                              TransacaoRepository transacaoRepository,
@@ -30,7 +34,10 @@ public class AssistenteService {
                              OrcamentoService orcamentoService,
                              CurrencyService currencyService,
                              RelatorioService relatorioService,
-                             EconomiaService economiaService) {
+                             EconomiaService economiaService,
+                             FrasesService frasesService,
+                             CarteiraRelatorioService carteiraRelatorioService,
+                             CarteiraService carteiraService) {
         this.transacaoIaService = transacaoIaService;
         this.transacaoRepository = transacaoRepository;
         this.transacaoService = transacaoService;
@@ -38,6 +45,9 @@ public class AssistenteService {
         this.currencyService = currencyService;
         this.relatorioService = relatorioService;
         this.economiaService = economiaService;
+        this.frasesService = frasesService;
+        this.carteiraRelatorioService = carteiraRelatorioService;
+        this.carteiraService = carteiraService;
     }
 
     public ChatResponse processarMensagem(String mensagem) {
@@ -54,16 +64,55 @@ public class AssistenteService {
                 String resposta;
                 if (salva.getTipo() == TipoTransacao.RECEITA) {
                     resposta = String.format(
-                            "Entrada registrada: +R$ %.2f em %s.\nBom ver dinheiro vindo **pra você** e não indo embora.",
+                            frasesService.escolher("ADD_RECEITA"),
                             salva.getValor(),
                             formatarCategoria(salva.getCategoria())
                     );
                 } else {
                     resposta = String.format(
-                            "Gasto registrado: -R$ %.2f em %s.\nAnotado. Só não transforma isso em esporte, combinado?",
+                            frasesService.escolher("ADD_DESPESA"),
                             salva.getValor(),
                             formatarCategoria(salva.getCategoria())
                     );
+                }
+
+                // alerta imediato (só para DESPESA)
+                if (salva.getTipo() == TipoTransacao.DESPESA) {
+
+                    YearMonth ym = YearMonth.from(LocalDate.now());
+                    var status = orcamentoService.consultarStatus(
+                            ym.getYear(),
+                            ym.getMonthValue(),
+                            salva.getCategoria()
+                    );
+
+                    BigDecimal limite = status.getLimite();
+                    BigDecimal gasto = status.getGasto();
+
+                    if (limite != null && limite.compareTo(BigDecimal.ZERO) > 0) {
+
+                        if (gasto.compareTo(limite) > 0) {
+                            resposta += "\n\n" + String.format(
+                                    frasesService.escolher("BUDGET_ESTOURO"),
+                                    formatarCategoria(salva.getCategoria())
+                            );
+                        } else {
+                            BigDecimal perc = gasto.divide(limite, 2, RoundingMode.HALF_UP)
+                                    .multiply(BigDecimal.valueOf(100));
+
+                            if (perc.compareTo(BigDecimal.valueOf(90)) >= 0) {
+                                resposta += "\n\n" + String.format(
+                                        frasesService.escolher("BUDGET_90"),
+                                        formatarCategoria(salva.getCategoria())
+                                );
+                            } else if (perc.compareTo(BigDecimal.valueOf(80)) >= 0) {
+                                resposta += "\n\n" + String.format(
+                                        frasesService.escolher("BUDGET_80"),
+                                        formatarCategoria(salva.getCategoria())
+                                );
+                            }
+                        }
+                    }
                 }
 
                 yield new ChatResponse(resposta);
@@ -72,13 +121,14 @@ public class AssistenteService {
             case "DELETE_TRANSACTION" -> {
                 Transacao removida = transacaoService.removerPorTexto(mensagem);
                 yield new ChatResponse(String.format(
-                        "Feito. Apaguei: %s de R$ %.2f em %s (%s).\n" +
-                                "Tente não transformar isso em edição de histórico. 😉",
+                        "Feito. Apaguei: %s de R$ %.2f em %s (%s).\n%s",
                         removida.getTipo().name(),
                         removida.getValor(),
                         formatarCategoria(removida.getCategoria()),
-                        removida.getData()
+                        removida.getData(),
+                        frasesService.escolher("DELETE_OK")
                 ));
+
             }
 
             case "ASK_MONTH_SUMMARY" -> {
@@ -282,6 +332,176 @@ public class AssistenteService {
                 ));
             }
 
+            case "ASK_BUDGET_OVERVIEW" -> {
+                YearMonth ym = YearMonth.from(LocalDate.now());
+                int ano = ym.getYear();
+                int mes = ym.getMonthValue();
+
+                var statusList = orcamentoService.resumoGeral(ano, mes);
+
+                BigDecimal totalLimites = BigDecimal.ZERO;
+                BigDecimal totalGastos = BigDecimal.ZERO;
+
+                StringBuilder sb = new StringBuilder();
+                sb.append(String.format("📌 Resumo geral de orçamentos — %02d/%d\n\n", mes, ano));
+
+                for (var st : statusList) {
+                    BigDecimal limite = st.getLimite() == null ? BigDecimal.ZERO : st.getLimite();
+                    BigDecimal gasto = st.getGasto() == null ? BigDecimal.ZERO : st.getGasto();
+
+                    // Só mostra categorias que tenham orçamento definido OU que tiveram gasto
+                    if (limite.compareTo(BigDecimal.ZERO) <= 0 && gasto.compareTo(BigDecimal.ZERO) <= 0) {
+                        continue;
+                    }
+
+                    totalLimites = totalLimites.add(limite);
+                    totalGastos = totalGastos.add(gasto);
+
+                    String catFmt = formatarCategoria(st.getCategoria());
+
+                    String badge;
+                    if (limite.compareTo(BigDecimal.ZERO) <= 0) {
+                        badge = "⚪ sem limite";
+                    } else if (gasto.compareTo(limite) > 0) {
+                        badge = "🚨 estourado";
+                    } else {
+                        BigDecimal perc = gasto.divide(limite, 2, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+                        if (perc.compareTo(BigDecimal.valueOf(90)) >= 0) badge = "🔥 " + perc.intValue() + "%";
+                        else if (perc.compareTo(BigDecimal.valueOf(80)) >= 0) badge = "⚠️ " + perc.intValue() + "%";
+                        else badge = "✅ " + perc.intValue() + "%";
+                    }
+
+                    sb.append(String.format(
+                            "- %s: R$ %.2f / R$ %.2f (%s)\n",
+                            catFmt, gasto, limite, badge
+                    ));
+                }
+
+                sb.append("\n");
+
+                if (totalLimites.compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal percTotal = totalGastos.divide(totalLimites, 2, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
+                    sb.append(String.format("Total: R$ %.2f de R$ %.2f (%.0f%%)\n",
+                            totalGastos, totalLimites, percTotal));
+                } else {
+                    sb.append(String.format("Total gasto no mês: R$ %.2f\n", totalGastos));
+                    sb.append("Você ainda não definiu limites gerais. Corajosa essa sua fé no destino. 😏\n");
+                }
+
+                sb.append("\nSe quiser, eu detalho uma categoria específica. 😉");
+
+                yield new ChatResponse(sb.toString());
+            }
+
+            case "ASK_PORTFOLIO_REPORT" -> {
+                var e = rota.getEntities();
+
+                String range = e != null && e.get("range") != null ? e.get("range").toString() : "UNSPECIFIED";
+                Integer days = null;
+                if (e != null && e.get("days") != null) {
+                    days = Integer.valueOf(e.get("days").toString());
+                }
+
+                String periodoLabel = switch (range) {
+                    case "TODAY" -> "hoje";
+                    case "YESTERDAY" -> "ontem";
+                    case "THIS_WEEK" -> "essa semana";
+                    case "LAST_WEEK" -> "semana passada";
+                    case "THIS_MONTH" -> "esse mês";
+                    case "LAST_MONTH" -> "mês passado";
+                    case "LAST_N_DAYS" -> "últimos " + (days == null ? 7 : days) + " dias";
+                    default -> "no período recente";
+                };
+
+                // filtro por texto (fiis/ações/cripto)
+                ClasseAtivo filtro = inferirFiltroCarteira(mensagem);
+
+                var resumo = carteiraRelatorioService.gerarResumo(periodoLabel, filtro);
+
+                StringBuilder sb = new StringBuilder();
+                sb.append("📊 Carteira de investimentos — ").append(resumo.getPeriodoLabel()).append("\n\n");
+
+                if (resumo.getItens().isEmpty()) {
+                    sb.append("Sua carteira está vazia. Isso é paz… ou procrastinação. 😏");
+                    yield new ChatResponse(sb.toString());
+                }
+
+                for (var it : resumo.getItens()) {
+                    sb.append(String.format(
+                            "- %s (%s): %.8f | Cotação: R$ %.2f | Valor: R$ %.2f\n",
+                            it.getTicker(),
+                            it.getClasse().name(),
+                            it.getQuantidade(),
+                            it.getPrecoAtual(),
+                            it.getValorEstimado()
+                    ));
+                }
+
+                sb.append("\n📌 Totais:\n");
+                sb.append(String.format("- Ações: R$ %.2f\n", resumo.getTotalAcoes()));
+                sb.append(String.format("- FIIs: R$ %.2f\n", resumo.getTotalFiis()));
+                sb.append(String.format("- Cripto: R$ %.2f\n", resumo.getTotalCripto()));
+                sb.append(String.format("\n💰 Total geral: R$ %.2f\n", resumo.getTotalGeral()));
+
+                sb.append("\nSe quiser eu separo por classe: “relatório de fiis” / “relatório de cripto”. 😉");
+
+                yield new ChatResponse(sb.toString());
+            }
+
+            case "ADD_HOLDING_QTY" -> {
+                Map<String, Object> e = rota.getEntities();
+                if (e == null || e.get("ticker") == null || e.get("classe") == null || e.get("qty") == null) {
+                    yield new ChatResponse("Me diz o ativo e a quantidade. Ex: \"adicionar 10 ações da PETR4\".");
+                }
+
+                String ticker = e.get("ticker").toString().toUpperCase();
+                ClasseAtivo classe = ClasseAtivo.valueOf(e.get("classe").toString().toUpperCase());
+                BigDecimal qty = new BigDecimal(e.get("qty").toString());
+
+                carteiraService.adicionarQuantidade(classe, ticker, qty);
+
+                yield new ChatResponse(String.format(
+                        "Beleza. Adicionei %.8f de %s (%s) na sua carteira. ✅",
+                        qty, ticker, classe.name()
+                ));
+            }
+
+            case "SELL_HOLDING_QTY" -> {
+                Map<String, Object> e = rota.getEntities();
+                if (e == null || e.get("ticker") == null || e.get("classe") == null || e.get("qty") == null) {
+                    yield new ChatResponse("Me diz o ativo e a quantidade. Ex: \"vendi 5 ações da BBAS3\".");
+                }
+
+                String ticker = e.get("ticker").toString().toUpperCase();
+                ClasseAtivo classe = ClasseAtivo.valueOf(e.get("classe").toString().toUpperCase());
+                BigDecimal qty = new BigDecimal(e.get("qty").toString());
+
+                // vender = adicionar quantidade negativa
+                carteiraService.adicionarQuantidade(classe, ticker, qty.negate());
+
+                yield new ChatResponse(String.format(
+                        "Ok. Dei baixa de %.8f de %s (%s). ✅",
+                        qty, ticker, classe.name()
+                ));
+            }
+
+            case "ADD_HOLDING_VALUE" -> {
+                Map<String, Object> e = rota.getEntities();
+                if (e == null || e.get("ticker") == null || e.get("classe") == null || e.get("value_brl") == null) {
+                    yield new ChatResponse("Me diz o ativo e o valor em reais. Ex: \"adicione 20 reais em BTC\".");
+                }
+
+                String ticker = e.get("ticker").toString().toUpperCase();
+                ClasseAtivo classe = ClasseAtivo.valueOf(e.get("classe").toString().toUpperCase());
+                BigDecimal valorBRL = new BigDecimal(e.get("value_brl").toString());
+
+                carteiraService.adicionarPorValorBRL(classe, ticker, valorBRL);
+
+                yield new ChatResponse(String.format(
+                        "Fechado. Converti R$ %.2f em %s (%s) e somei na sua carteira. ✅",
+                        valorBRL, ticker, classe.name()
+                ));
+            }
 
             default -> new ChatResponse("Não entendi. Reformula isso como se eu fosse uma IA milionária, por favor. 😏");
         };
@@ -316,4 +536,21 @@ public class AssistenteService {
 
         return CategoriaTransacao.OUTROS;
     }
+
+    private ClasseAtivo inferirFiltroCarteira(String mensagem) {
+        String m = mensagem.toLowerCase();
+
+        if (m.contains("cripto") || m.contains("bitcoin") || m.contains("btc") || m.contains("eth")) {
+            return ClasseAtivo.CRIPTO;
+        }
+        if (m.contains("fii") || m.contains("fiis") || m.contains("fundo imobili") ) {
+            return ClasseAtivo.FII;
+        }
+        if (m.contains("acao") || m.contains("ações") || m.contains("acoes") || m.contains("bolsa")) {
+            return ClasseAtivo.ACAO;
+        }
+
+        return null; // sem filtro => tudo
+    }
+
 }

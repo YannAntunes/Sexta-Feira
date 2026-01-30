@@ -1,4 +1,7 @@
 package br.com.yann.sextafeira.domain.model;
 
-public class ClasseAtivo {
+public enum ClasseAtivo {
+    ACAO,
+    FII,
+    CRIPTO
 }

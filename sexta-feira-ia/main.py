@@ -8,6 +8,7 @@ from typing import List
 from fastapi.responses import StreamingResponse
 import matplotlib.pyplot as plt
 import io
+import unicodedata
 
 app = FastAPI(title="SEXTA-FEIRA IA Service")
 
@@ -126,16 +127,103 @@ def detectar_idioma(mensagem: str) -> str:
     return "pt"
 
 
+MESES = {
+    "janeiro": 1, "jan": 1,
+    "fevereiro": 2, "fev": 2,
+    "março": 3, "marco": 3, "mar": 3,
+    "abril": 4, "abr": 4,
+    "maio": 5,
+    "junho": 6, "jun": 6,
+    "julho": 7, "jul": 7,
+    "agosto": 8, "ago": 8,
+    "setembro": 9, "set": 9,
+    "outubro": 10, "out": 10,
+    "novembro": 11, "nov": 11,
+    "dezembro": 12, "dez": 12,
+}
+
+DOW = {
+    "segunda": 0, "seg": 0, "monday": 0, "mon": 0,
+    "terça": 1, "terca": 1, "ter": 1, "tuesday": 1, "tue": 1,
+    "quarta": 2, "qua": 2, "wednesday": 2, "wed": 2,
+    "quinta": 3, "qui": 3, "thursday": 3, "thu": 3,
+    "sexta": 4, "sex": 4, "friday": 4, "fri": 4,
+    "sábado": 5, "sabado": 5, "sab": 5, "saturday": 5, "sat": 5,
+    "domingo": 6, "dom": 6, "sunday": 6, "sun": 6,
+}
+
+def _ultima_ocorrencia_dia_semana(target_dow: int, ref: date) -> date:
+    # volta até o último dia da semana desejado (pode ser hoje)
+    delta = (ref.weekday() - target_dow) % 7
+    return ref - timedelta(days=delta)
+
 def interpretar_data(mensagem: str) -> date:
-    m_low = mensagem.lower()
+    m = mensagem.lower()
     hoje = date.today()
 
-    if "anteontem" in m_low or "day before yesterday" in m_low:
+    # há N dias / N days ago
+    m1 = re.search(r"há\s+(\d+)\s+dias", m) or re.search(r"(\d+)\s+days\s+ago", m)
+    if m1:
+        n = int(m1.group(1))
+        return hoje - timedelta(days=n)
+
+    # anteontem / ontem / hoje
+    if "anteontem" in m or "day before yesterday" in m:
         return hoje - timedelta(days=2)
-    if "ontem" in m_low or "yesterday" in m_low:
+    if "ontem" in m or "yesterday" in m:
         return hoje - timedelta(days=1)
-    if "hoje" in m_low or "today" in m_low:
+    if "hoje" in m or "today" in m:
         return hoje
+
+    # dd/mm ou dd-mm (assume ano atual)
+    m2 = re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b", m)
+    if m2:
+        d = int(m2.group(1))
+        mo = int(m2.group(2))
+        y = int(m2.group(3)) if m2.group(3) else hoje.year
+        if y < 100:
+            y += 2000
+        try:
+            return date(y, mo, d)
+        except ValueError:
+            return hoje
+
+    # "dia 15" (assume mês atual)
+    m3 = re.search(r"\bdia\s+(\d{1,2})\b", m)
+    if m3:
+        d = int(m3.group(1))
+        try:
+            return date(hoje.year, hoje.month, d)
+        except ValueError:
+            return hoje
+
+    # "15 de janeiro" / "15 jan"
+    m4 = re.search(r"\b(\d{1,2})\s+de\s+([a-zç]+)\b", m) or re.search(r"\b(\d{1,2})\s+([a-zç]{3,9})\b", m)
+    if m4:
+        d = int(m4.group(1))
+        mes_txt = m4.group(2)
+        if mes_txt in MESES:
+            mo = MESES[mes_txt]
+            try:
+                return date(hoje.year, mo, d)
+            except ValueError:
+                return hoje
+
+    # "última sexta" / "last friday"
+    m5 = re.search(r"(última|ultima)\s+([a-zç]+)", m) or re.search(r"last\s+([a-z]+)", m)
+    if m5:
+        dia_txt = m5.group(2) if len(m5.groups()) == 2 else m5.group(1)
+        if dia_txt in DOW:
+            base = _ultima_ocorrencia_dia_semana(DOW[dia_txt], hoje)
+            # se caiu hoje, volta 7 dias (porque "última" normalmente significa anterior)
+            if base == hoje:
+                base = hoje - timedelta(days=7)
+            return base
+
+    # "na terça" / "on tuesday" => última ocorrência daquele dia
+    for token in re.findall(r"[a-zà-ÿ]+", m):
+        if token in DOW:
+            return _ultima_ocorrencia_dia_semana(DOW[token], hoje)
 
     return hoje
 
@@ -173,6 +261,15 @@ def detectar_intencao(mensagem: str) -> str:
     ]) and any(x in m_low for x in ["orçamento", "orcamento", "budget"]):
         return "SET_BUDGET"
 
+        # BUDGET OVERVIEW (resumo geral)
+    if any(x in m_low for x in [
+        "resumo do orçamento", "resumo dos orçamentos", "orçamento geral", "orcamento geral",
+        "como estão meus orçamentos", "como estao meus orcamentos",
+        "status dos orçamentos", "status do orçamento",
+        "budget overview", "overall budget", "all budgets"
+    ]):
+        return "ASK_BUDGET_OVERVIEW"
+
     if any(x in m_low for x in [
         "meu orçamento", "meu orcamento",
         "budget status", "how is my budget",
@@ -203,18 +300,22 @@ def detectar_intencao(mensagem: str) -> str:
     ]):
         return "ASK_SAVING_TIPS"
     
-    if intent == "SET_BUDGET":
-        amount = parse_amount(mensagem)
-        category = parse_budget_category(mensagem)
+    # ===== INVESTIMENTOS =====
+    if any(x in m_low for x in ["carteira", "investimentos", "portfolio", "portfólio", "relatorio de fiis", "relatório de fiis",
+                                "relatorio de acoes", "relatório de ações", "relatorio de cripto", "relatório de cripto",
+                                "como está minha carteira", "como esta minha carteira"]):
+        return "ASK_PORTFOLIO_REPORT"
 
-        # fallback seguro
-        if category is None:
-            category = "OUTROS"
+    if any(x in m_low for x in ["adicionar", "adicione", "comprar", "compre", "aporte", "investi", "investir"]) and any(
+        x in m_low for x in ["btc", "eth", "bitcoin", "ethereum", "petr4", "b3sa3", "bbas3", "mxrf11", "fii", "acao", "ações", "acoes", "cripto"]
+    ):
+        # por enquanto: se vier "reais" assume ADD_HOLDING_VALUE, senão quantidade
+        if any(x in m_low for x in ["real", "reais", "r$"]):
+            return "ADD_HOLDING_VALUE"
+        return "ADD_HOLDING_QTY"
 
-        entities["amount"] = amount
-        entities["category"] = category
-
-
+    if any(x in m_low for x in ["vendi", "vender", "venda", "sell", "sold"]):
+        return "SELL_HOLDING_QTY"
 
     return "UNKNOWN"
 
@@ -299,6 +400,9 @@ def detectar_timeframe(mensagem: str) -> dict:
 
     return {"range": "UNSPECIFIED"}
 
+# ========= HELPERS (CATEGORIA) =========
+
+
 def parse_budget_entities(msg: str) -> dict:
     m = msg.lower()
 
@@ -331,9 +435,47 @@ def parse_budget_category(msg: str) -> str | None:
 
     return None
 
+# ========= HELPERS (INVESTIMENTO) =========
 
+def parse_ticker(msg: str) -> str | None:
+    m = re.search(r"\b[A-Za-z]{2,6}\d{1,2}\b", msg.upper())
+    if m:
+        return m.group(0)
+    # cripto simples: BTC, ETH
+    m2 = re.search(r"\b(BTC|ETH|SOL|XRP|ADA)\b", msg.upper())
+    return m2.group(1) if m2 else None
+
+def infer_classe_ativo(ticker: str, msg: str) -> str:
+    t = ticker.upper()
+    m = msg.lower()
+    if "fii" in m or "fiis" in m or t.endswith("11"):
+        return "FII"
+    if t.isalpha():  # BTC, ETH
+        return "CRIPTO"
+    return "ACAO"
+
+def normalize(s: str) -> str:
+    s = s.lower().strip()
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s)
+        if unicodedata.category(c) != "Mn"
+    )
+
+def is_portfolio_query(msg: str) -> bool:
+    m = normalize(msg)
+    portfolio_words = [
+        "carteira", "portfolio", "portfolio de investimentos", "investimentos",
+        "relatorio da carteira", "relatorio de carteira", "relatorio carteira",
+        "relatorio de acoes","relatorio de ações","relatorio de ação", "relatorio de acao", "relatorio de fii", "relatorio de fiis",
+        "relatorio de cripto", "relatorio de criptos", "minha carteira"
+    ]
+    return any(w in m for w in portfolio_words)
 
 # ========= ENDPOINTS =========
+
+@app.get("/")
+def health():
+    return {"status": "ok", "service": "sexta-feira-ia"}
 
 @app.post("/ia/transacoes/interpretar", response_model=TransacaoInterpretada)
 def interpretar_transacao(request: MensagemRequest):
@@ -348,7 +490,7 @@ def interpretar_transacao(request: MensagemRequest):
 
     return TransacaoInterpretada(
         valor=valor,
-        data=date.today(),
+        data=interpretar_data(mensagem),
         tipo=tipo,
         categoria=categoria,
         descricao=mensagem
@@ -380,14 +522,34 @@ def router(request: MensagemRequest):
         conv = parse_convert_entities(mensagem)
         entities.update(conv)
 
+    if intent in ["ADD_HOLDING_QTY", "SELL_HOLDING_QTY", "ADD_HOLDING_VALUE", "ASK_PORTFOLIO_REPORT"]:
+        ticker = parse_ticker(mensagem)
+        if ticker:
+            entities["ticker"] = ticker
+            entities["classe"] = infer_classe_ativo(ticker, mensagem)
+
+        amt = parse_amount(mensagem)
+        if amt is not None:
+            if intent == "ADD_HOLDING_VALUE":
+                entities["value_brl"] = amt
+            else:
+                entities["qty"] = amt
+
+        if intent == "ASK_PORTFOLIO_REPORT":
+            entities.update(detectar_timeframe(mensagem))
+
+    m = mensagem  # seu texto original
+
+    # ✅ PRIORIDADE: carteira primeiro
+    if is_portfolio_query(m):
+        intent = "ASK_PORTFOLIO_REPORT"
+        entities.update(detectar_timeframe(m))  # mantém "essa semana" etc
+        return {"intent": intent, "entities": entities, "lang": "pt"}
+
+    # depois vem ASK_PERIOD_SUMMARY e o resto...
     if intent == "ASK_PERIOD_SUMMARY":
-        entities.update(detectar_timeframe(mensagem))
-
-    if intent == "SET_BUDGET":
-        entities.update(parse_budget_entities(mensagem))
-
-
-    return RouterResponse(intent=intent, entities=entities, lang=lang)
+        entities.update(detectar_timeframe(m))
+        return RouterResponse(intent=intent, entities=entities, lang=lang)
 
 
 @app.post("/ia/charts/gastos-por-categoria")

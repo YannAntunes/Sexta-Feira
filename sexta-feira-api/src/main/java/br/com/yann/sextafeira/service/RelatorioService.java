@@ -1,15 +1,15 @@
 package br.com.yann.sextafeira.service;
 
-import br.com.yann.sextafeira.domain.model.CategoriaTransacao;
+import br.com.yann.sextafeira.domain.model.AlertaOrcamento;
 import br.com.yann.sextafeira.dto.RelatorioMensalResponse;
 import br.com.yann.sextafeira.dto.ResumoMensalDTO;
+import br.com.yann.sextafeira.repository.AlertaOrcamentoRepository;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 @Service
@@ -17,14 +17,14 @@ public class RelatorioService {
 
     private final TransacaoService transacaoService;
     private final ChartsService chartsService;
-    private final OrcamentoService orcamentoService;
+    private final AlertaOrcamentoRepository alertaRepo;
 
     public RelatorioService(TransacaoService transacaoService,
                             ChartsService chartsService,
-                            OrcamentoService orcamentoService) {
+                            AlertaOrcamentoRepository alertaRepo) {
         this.transacaoService = transacaoService;
         this.chartsService = chartsService;
-        this.orcamentoService = orcamentoService;
+        this.alertaRepo = alertaRepo;
     }
 
     public RelatorioMensalResponse gerarRelatorioMesAtual() {
@@ -37,7 +37,6 @@ public class RelatorioService {
 
         String mesAno = String.format("%02d/%d", mes, ano);
 
-        // Texto principal (SEXTÊIRA mode B)
         String humor = resumo.getSaldo().signum() >= 0
                 ? "Você tá no azul. Por favor, não estraga isso."
                 : "Você tá no vermelho. A matemática não perdoa, só observa.";
@@ -55,43 +54,36 @@ public class RelatorioService {
                 humor
         );
 
-        // Top categorias (3)
+        // Top categorias (3) - AQUI o key é String mesmo
         var top = chartsService.topCategoriasGastoMesAtual(3);
         List<String> topCategorias = new ArrayList<>();
         for (var e : top) {
-            topCategorias.add(String.format("%s: R$ %.2f", formatarCategoria(e.getKey()), e.getValue()));
+            String catRaw = e.getKey(); // String tipo "ALIMENTACAO"
+            topCategorias.add(String.format("%s: R$ %.2f", formatarCategoria(catRaw), e.getValue()));
         }
         if (topCategorias.isEmpty()) {
             topCategorias.add("Sem gastos registrados no mês (milagre raro).");
         }
 
-        // Alertas de orçamento
+        // Alertas reais do banco (já enviados pelo monitoramento)
+        List<AlertaOrcamento> alertasDb = alertaRepo.findByAnoAndMes(ano, mes);
+        alertasDb.sort(Comparator.comparing(AlertaOrcamento::getEnviadoEm).reversed());
+
         List<String> alertas = new ArrayList<>();
-        for (CategoriaTransacao cat : CategoriaTransacao.values()) {
+        for (AlertaOrcamento a : alertasDb) {
+            String cat = formatarCategoria(a.getCategoria().name());
 
-            var status = orcamentoService.consultarStatus(ano, mes, cat);
-            BigDecimal limite = status.getLimite();
-            BigDecimal gasto = status.getGasto();
-
-            if (limite == null || limite.compareTo(BigDecimal.ZERO) <= 0) continue; // sem orçamento definido
-
-            if (status.isEstourado()) {
-                BigDecimal excedente = gasto.subtract(limite);
-                alertas.add(String.format("🚨 %s estourou: +R$ %.2f", formatarCategoria(cat.name()), excedente));
-                continue;
-            }
-
-            BigDecimal perc = gasto.divide(limite, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-
-            if (perc.compareTo(BigDecimal.valueOf(80)) >= 0) {
-                alertas.add(String.format("⚠️ %s em %.0f%% do orçamento", formatarCategoria(cat.name()), perc));
+            switch (a.getTipoAlerta()) {
+                case "ESTOURO" -> alertas.add("🚨 " + cat + " estourou o orçamento.");
+                case "PERCENT_90" -> alertas.add("🔥 " + cat + " passou de 90% do orçamento.");
+                case "PERCENT_80" -> alertas.add("⚠️ " + cat + " passou de 80% do orçamento.");
+                default -> alertas.add("🚦 " + cat + " alerta: " + a.getTipoAlerta());
             }
         }
         if (alertas.isEmpty()) {
             alertas.add("Sem alertas no orçamento. Continue fingindo que é adulto responsável. 😉");
         }
 
-        // Links (seu host é localhost; se depois tiver front, muda fácil)
         List<String> links = List.of(
                 "http://localhost:8080/api/v1/charts/gastos-mes.png",
                 "http://localhost:8080/api/v1/charts/orcamento-vs-gasto.png",

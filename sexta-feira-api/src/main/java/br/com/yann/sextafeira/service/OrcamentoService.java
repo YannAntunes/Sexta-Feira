@@ -80,4 +80,16 @@ public class OrcamentoService {
                 estourado
         );
     }
+
+    public List<StatusOrcamentoDTO> resumoGeral(int ano, int mes) {
+
+        List<StatusOrcamentoDTO> lista = new java.util.ArrayList<>();
+
+        for (CategoriaTransacao cat : CategoriaTransacao.values()) {
+            lista.add(consultarStatus(ano, mes, cat));
+        }
+
+        return lista;
+    }
+
 }

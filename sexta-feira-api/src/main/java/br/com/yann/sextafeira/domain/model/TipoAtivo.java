@@ -1,4 +1,6 @@
 package br.com.yann.sextafeira.domain.model;
 
-public class TipoAtivo {
+public enum TipoAtivo {
+    ACAO,
+    CRIPTO
 }
