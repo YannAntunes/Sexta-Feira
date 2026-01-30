@@ -27,6 +27,7 @@ public class AssistenteService {
     private final FrasesService frasesService;
     private final CarteiraRelatorioService carteiraRelatorioService;
     private final CarteiraService carteiraService;
+    private final CarteiraPerformanceService carteiraPerformanceService;
 
     public AssistenteService(TransacaoIaService transacaoIaService,
                              TransacaoRepository transacaoRepository,
@@ -37,7 +38,8 @@ public class AssistenteService {
                              EconomiaService economiaService,
                              FrasesService frasesService,
                              CarteiraRelatorioService carteiraRelatorioService,
-                             CarteiraService carteiraService) {
+                             CarteiraService carteiraService,
+                             CarteiraPerformanceService carteiraPerformanceService) {
         this.transacaoIaService = transacaoIaService;
         this.transacaoRepository = transacaoRepository;
         this.transacaoService = transacaoService;
@@ -48,6 +50,7 @@ public class AssistenteService {
         this.frasesService = frasesService;
         this.carteiraRelatorioService = carteiraRelatorioService;
         this.carteiraService = carteiraService;
+        this.carteiraPerformanceService = carteiraPerformanceService;
     }
 
     public ChatResponse processarMensagem(String mensagem) {
@@ -398,55 +401,35 @@ public class AssistenteService {
 
                 String range = e != null && e.get("range") != null ? e.get("range").toString() : "UNSPECIFIED";
                 Integer days = null;
-                if (e != null && e.get("days") != null) {
-                    days = Integer.valueOf(e.get("days").toString());
-                }
+                if (e != null && e.get("days") != null) days = Integer.valueOf(e.get("days").toString());
 
-                String periodoLabel = switch (range) {
-                    case "TODAY" -> "hoje";
-                    case "YESTERDAY" -> "ontem";
-                    case "THIS_WEEK" -> "essa semana";
-                    case "LAST_WEEK" -> "semana passada";
-                    case "THIS_MONTH" -> "esse mês";
-                    case "LAST_MONTH" -> "mês passado";
-                    case "LAST_N_DAYS" -> "últimos " + (days == null ? 7 : days) + " dias";
-                    default -> "no período recente";
-                };
+                var datas = PeriodoService.resolverRange(range, days);
+                var inicio = datas.get("inicio");
+                var fim = datas.get("fim");
 
-                // filtro por texto (fiis/ações/cripto)
                 ClasseAtivo filtro = inferirFiltroCarteira(mensagem);
 
+                String relPeriodo = carteiraPerformanceService.gerarRelatorioPeriodo(inicio, fim, filtro);
+
+                // (opcional) um bloco extra de posição atual detalhada via resumo
+                String periodoLabel = "no período";
                 var resumo = carteiraRelatorioService.gerarResumo(periodoLabel, filtro);
 
-                StringBuilder sb = new StringBuilder();
-                sb.append("📊 Carteira de investimentos — ").append(resumo.getPeriodoLabel()).append("\n\n");
-
-                if (resumo.getItens().isEmpty()) {
-                    sb.append("Sua carteira está vazia. Isso é paz… ou procrastinação. 😏");
-                    yield new ChatResponse(sb.toString());
+                StringBuilder sb = new StringBuilder(relPeriodo);
+                sb.append("\n\n🔎 Detalhe (posição atual):\n");
+                if (resumo.getItens().isEmpty()) sb.append("— vazia —");
+                else {
+                    for (var it : resumo.getItens()) {
+                        sb.append(String.format("- %s (%s): %.8f | R$ %.2f | R$ %.2f\n",
+                                it.getTicker(), it.getClasse().name(), it.getQuantidade(),
+                                it.getPrecoAtual(), it.getValorEstimado()
+                        ));
+                    }
                 }
-
-                for (var it : resumo.getItens()) {
-                    sb.append(String.format(
-                            "- %s (%s): %.8f | Cotação: R$ %.2f | Valor: R$ %.2f\n",
-                            it.getTicker(),
-                            it.getClasse().name(),
-                            it.getQuantidade(),
-                            it.getPrecoAtual(),
-                            it.getValorEstimado()
-                    ));
-                }
-
-                sb.append("\n📌 Totais:\n");
-                sb.append(String.format("- Ações: R$ %.2f\n", resumo.getTotalAcoes()));
-                sb.append(String.format("- FIIs: R$ %.2f\n", resumo.getTotalFiis()));
-                sb.append(String.format("- Cripto: R$ %.2f\n", resumo.getTotalCripto()));
-                sb.append(String.format("\n💰 Total geral: R$ %.2f\n", resumo.getTotalGeral()));
-
-                sb.append("\nSe quiser eu separo por classe: “relatório de fiis” / “relatório de cripto”. 😉");
 
                 yield new ChatResponse(sb.toString());
             }
+
 
             case "ADD_HOLDING_QTY" -> {
                 Map<String, Object> e = rota.getEntities();

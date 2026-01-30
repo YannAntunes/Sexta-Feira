@@ -2,13 +2,15 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 import re
 from typing import List
 from fastapi.responses import StreamingResponse
 import matplotlib.pyplot as plt
 import io
 import unicodedata
+import traceback
+
 
 app = FastAPI(title="SEXTA-FEIRA IA Service")
 
@@ -58,7 +60,13 @@ class ChartSerieRequest(BaseModel):
     items: list[ChartSerieItem]
     y_label: str = "R$"
 
+class IaTransacaoRequest(BaseModel):
+    mensagem: str
 
+class IaRouterResponse(BaseModel):
+    intent: str
+    entities: Dict[str, Any] = {}
+    lang: str = "pt"
 
 # ========= HELPERS (TRANSAÇÃO) =========
 
@@ -471,6 +479,12 @@ def is_portfolio_query(msg: str) -> bool:
     ]
     return any(w in m for w in portfolio_words)
 
+def _safe_upper(s: Optional[str]) -> Optional[str]:
+    if s is None:
+        return None
+    s = str(s).strip()
+    return s.upper() if s else None
+
 # ========= ENDPOINTS =========
 
 @app.get("/")
@@ -508,6 +522,21 @@ def router(request: MensagemRequest):
 
     entities["data"] = str(interpretar_data(mensagem))
 
+    m = mensagem  # seu texto original
+
+    # ✅ PRIORIDADE: carteira primeiro
+    if is_portfolio_query(m):
+        intent = "ASK_PORTFOLIO_REPORT"
+        entities.update(detectar_timeframe(m))
+
+        ticker = parse_ticker(m)
+        if ticker:
+            entities["ticker"] = ticker
+            entities["classe"] = infer_classe_ativo(ticker, m)
+
+        return RouterResponse(intent=intent, entities=entities, lang=lang)
+
+    # ===== TRANSACOES =====
     if intent in ["ADD_TRANSACTION", "DELETE_TRANSACTION"]:
         t = interpretar_transacao(request)
         entities.update({
@@ -517,11 +546,15 @@ def router(request: MensagemRequest):
             "descricao": t.descricao,
             "data": str(t.data)
         })
+        return RouterResponse(intent=intent, entities=entities, lang=lang)
 
+    # ===== CONVERSAO =====
     if intent == "CONVERT_CURRENCY":
         conv = parse_convert_entities(mensagem)
         entities.update(conv)
+        return RouterResponse(intent=intent, entities=entities, lang=lang)
 
+    # ===== CARTEIRA (intents) =====
     if intent in ["ADD_HOLDING_QTY", "SELL_HOLDING_QTY", "ADD_HOLDING_VALUE", "ASK_PORTFOLIO_REPORT"]:
         ticker = parse_ticker(mensagem)
         if ticker:
@@ -538,18 +571,16 @@ def router(request: MensagemRequest):
         if intent == "ASK_PORTFOLIO_REPORT":
             entities.update(detectar_timeframe(mensagem))
 
-    m = mensagem  # seu texto original
-
-    # ✅ PRIORIDADE: carteira primeiro
-    if is_portfolio_query(m):
-        intent = "ASK_PORTFOLIO_REPORT"
-        entities.update(detectar_timeframe(m))  # mantém "essa semana" etc
-        return {"intent": intent, "entities": entities, "lang": "pt"}
-
-    # depois vem ASK_PERIOD_SUMMARY e o resto...
-    if intent == "ASK_PERIOD_SUMMARY":
-        entities.update(detectar_timeframe(m))
         return RouterResponse(intent=intent, entities=entities, lang=lang)
+
+    # ===== TIMEFRAME (Resumo por período) =====
+    if intent == "ASK_PERIOD_SUMMARY":
+        entities.update(detectar_timeframe(mensagem))
+        return RouterResponse(intent=intent, entities=entities, lang=lang)
+
+    # ✅ FALLBACK FINAL (NUNCA retorna None)
+    return RouterResponse(intent=intent, entities=entities, lang=lang)
+
 
 
 @app.post("/ia/charts/gastos-por-categoria")
