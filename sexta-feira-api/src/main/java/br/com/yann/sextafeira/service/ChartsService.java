@@ -1,22 +1,18 @@
 package br.com.yann.sextafeira.service;
 
+import br.com.yann.sextafeira.domain.model.CategoriaTransacao;
 import br.com.yann.sextafeira.domain.model.TipoTransacao;
 import br.com.yann.sextafeira.domain.model.Transacao;
 import br.com.yann.sextafeira.dto.ChartBudgetItemDTO;
 import br.com.yann.sextafeira.repository.TransacaoRepository;
+import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.*;
-
-import br.com.yann.sextafeira.domain.model.CategoriaTransacao;
-import java.util.ArrayList;
-
-import java.util.List;
-import java.util.Map;
-
 
 @Service
 public class ChartsService {
@@ -24,6 +20,8 @@ public class ChartsService {
     private final TransacaoRepository transacaoRepository;
     private final OrcamentoService orcamentoService;
 
+    private final RestTemplate restTemplate = new RestTemplate();
+    private static final String IA_BASE = "http://localhost:8000";
 
     public ChartsService(TransacaoRepository repo, OrcamentoService orcamentoService) {
         this.transacaoRepository = repo;
@@ -47,7 +45,6 @@ public class ChartsService {
             soma.put(cat, soma.get(cat).add(t.getValor()));
         }
 
-        // ordenar por maior gasto
         return soma.entrySet().stream()
                 .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
                 .collect(LinkedHashMap::new,
@@ -58,26 +55,21 @@ public class ChartsService {
     public List<ChartBudgetItemDTO> orcamentoVsGastoMesAtual() {
         YearMonth ym = YearMonth.from(LocalDate.now());
 
-        // gasto por categoria (já ordenado desc)
         var gastosMap = gastosPorCategoriaDoMesAtual();
 
         List<ChartBudgetItemDTO> items = new ArrayList<>();
 
-        // percorre todas as categorias (para aparecer mesmo as que não tem gasto)
         for (CategoriaTransacao cat : CategoriaTransacao.values()) {
 
             BigDecimal gasto = gastosMap.getOrDefault(cat.name(), BigDecimal.ZERO);
 
-            // aqui eu uso seu orcamentoService; precisa estar injetado no ChartsService
             var status = orcamentoService.consultarStatus(ym.getYear(), ym.getMonthValue(), cat);
-            BigDecimal limite = status.getLimite(); // se não existir, ajuste conforme seu DTO
+            BigDecimal limite = status.getLimite();
 
             items.add(new ChartBudgetItemDTO(cat.name(), limite, gasto));
         }
 
-        // opcional: ordenar por quem mais estourou (gasto/limite)
         items.sort((a, b) -> b.getGasto().compareTo(a.getGasto()));
-
         return items;
     }
 
@@ -89,7 +81,6 @@ public class ChartsService {
 
         List<Transacao> transacoes = transacaoRepository.findByDataBetween(inicio, fim);
 
-        // inicializa todos os dias com 0 (pra linha ficar contínua)
         Map<LocalDate, BigDecimal> serie = new LinkedHashMap<>();
         for (int d = 1; d <= ym.lengthOfMonth(); d++) {
             serie.put(ym.atDay(d), BigDecimal.ZERO);
@@ -125,5 +116,23 @@ public class ChartsService {
         }
 
         return soma;
+    }
+
+    // ✅ NOVO: chama o Python e recebe a imagem PNG (bytes)
+    public byte[] gerarSerieLinhaPng(Map<String, Object> payload) {
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        HttpEntity<Map<String, Object>> req = new HttpEntity<>(payload, headers);
+
+        ResponseEntity<byte[]> resp = restTemplate.exchange(
+                IA_BASE + "/ia/charts/serie-linha",
+                HttpMethod.POST,
+                req,
+                byte[].class
+        );
+
+        return resp.getBody();
     }
 }

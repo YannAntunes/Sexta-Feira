@@ -24,7 +24,9 @@ public class CarteiraRelatorioService {
 
     public CarteiraResumoDTO gerarResumo(String periodoLabel, ClasseAtivo filtro) {
 
-        List<AtivoCarteira> ativos = carteiraService.listarTudo();
+        List<AtivoCarteira> ativos = (filtro == null)
+                ? carteiraService.listarTudo()
+                : carteiraService.listarPorClasse(filtro);
         List<CarteiraAtivoItemDTO> itens = new ArrayList<>();
 
         BigDecimal totalAcoes = BigDecimal.ZERO;
@@ -32,7 +34,6 @@ public class CarteiraRelatorioService {
         BigDecimal totalCripto = BigDecimal.ZERO;
 
         for (AtivoCarteira a : ativos) {
-            if (filtro != null && a.getClasse() != filtro) continue;
 
             BigDecimal precoAtual = cotacaoService.cotacaoAtualSeguro(a.getTicker(), a.getClasse());
             BigDecimal valor = a.getQuantidade().multiply(precoAtual).setScale(2, RoundingMode.HALF_UP);

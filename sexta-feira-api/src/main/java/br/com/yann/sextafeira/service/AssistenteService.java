@@ -28,6 +28,7 @@ public class AssistenteService {
     private final CarteiraRelatorioService carteiraRelatorioService;
     private final CarteiraService carteiraService;
     private final CarteiraPerformanceService carteiraPerformanceService;
+    private final SnapshotCarteiraService snapshotCarteiraService;
 
     public AssistenteService(TransacaoIaService transacaoIaService,
                              TransacaoRepository transacaoRepository,
@@ -39,7 +40,8 @@ public class AssistenteService {
                              FrasesService frasesService,
                              CarteiraRelatorioService carteiraRelatorioService,
                              CarteiraService carteiraService,
-                             CarteiraPerformanceService carteiraPerformanceService) {
+                             CarteiraPerformanceService carteiraPerformanceService,
+                             SnapshotCarteiraService snapshotCarteiraService) {
         this.transacaoIaService = transacaoIaService;
         this.transacaoRepository = transacaoRepository;
         this.transacaoService = transacaoService;
@@ -51,6 +53,7 @@ public class AssistenteService {
         this.carteiraRelatorioService = carteiraRelatorioService;
         this.carteiraService = carteiraService;
         this.carteiraPerformanceService = carteiraPerformanceService;
+        this.snapshotCarteiraService = snapshotCarteiraService;
     }
 
     public ChatResponse processarMensagem(String mensagem) {
@@ -400,34 +403,100 @@ public class AssistenteService {
                 var e = rota.getEntities();
 
                 String range = e != null && e.get("range") != null ? e.get("range").toString() : "UNSPECIFIED";
-                Integer days = null;
-                if (e != null && e.get("days") != null) days = Integer.valueOf(e.get("days").toString());
+                Integer days = (e != null && e.get("days") != null) ? Integer.valueOf(e.get("days").toString()) : null;
 
                 var datas = PeriodoService.resolverRange(range, days);
                 var inicio = datas.get("inicio");
                 var fim = datas.get("fim");
 
-                ClasseAtivo filtro = inferirFiltroCarteira(mensagem);
+                ClasseAtivo filtro = extrairClasseFiltro(e, mensagem);
 
+                // 1) Relatório do período (mantém, mas a gente vai enxugar depois dentro do service)
                 String relPeriodo = carteiraPerformanceService.gerarRelatorioPeriodo(inicio, fim, filtro);
 
-                // (opcional) um bloco extra de posição atual detalhada via resumo
-                String periodoLabel = "no período";
-                var resumo = carteiraRelatorioService.gerarResumo(periodoLabel, filtro);
+                // 2) Rentabilidade (pode retornar “sem snapshot suficiente”)
+                String rent = carteiraPerformanceService.gerarBlocoRentabilidade(inicio, fim, filtro);
 
-                StringBuilder sb = new StringBuilder(relPeriodo);
-                sb.append("\n\n🔎 Detalhe (posição atual):\n");
-                if (resumo.getItens().isEmpty()) sb.append("— vazia —");
-                else {
-                    for (var it : resumo.getItens()) {
-                        sb.append(String.format("- %s (%s): %.8f | R$ %.2f | R$ %.2f\n",
+                // 3) Melhor/Pior (idem)
+                String ranking = snapshotCarteiraService.topMelhoresEPioresNoPeriodo(inicio, fim, filtro);
+
+                // 4) Posição atual (só TOP 5 pra não virar textão)
+                var resumo = carteiraRelatorioService.gerarResumo("posição atual", filtro);
+
+                StringBuilder sb = new StringBuilder();
+                sb.append(relPeriodo).append("\n\n");
+                sb.append(rent).append("\n");
+                sb.append(ranking).append("\n");
+
+                sb.append("📌 Posição atual (top 5):\n");
+                if (resumo.getItens().isEmpty()) {
+                    sb.append("— vazia —\n");
+                } else {
+                    int limit = Math.min(5, resumo.getItens().size());
+                    for (int i = 0; i < limit; i++) {
+                        var it = resumo.getItens().get(i);
+                        sb.append(String.format(
+                                "- %s (%s): %.8f | R$ %.2f | R$ %.2f\n",
                                 it.getTicker(), it.getClasse().name(), it.getQuantidade(),
                                 it.getPrecoAtual(), it.getValorEstimado()
                         ));
                     }
+                    sb.append(String.format("\n💰 Total estimado: R$ %.2f\n", resumo.getTotalGeral()));
+                    if (resumo.getItens().size() > 5) {
+                        sb.append("… e mais ").append(resumo.getItens().size() - 5).append(" ativos.\n");
+                    }
                 }
 
+                String urlGrafico = String.format(
+                        "http://localhost:8080/api/v1/carteira/grafico?range=%s%s%s",
+                        range,
+                        (days != null ? "&days=" + days : ""),
+                        (filtro != null ? "&classe=" + filtro.name() : "")
+                );
+
+                sb.append("\n📊 Evolução do patrimônio:\n").append(urlGrafico).append("\n");
+                sb.append("\nQuer que eu detalhe um ativo específico? (ex: \"performance da PETR4 no período\") 😏");
+
                 yield new ChatResponse(sb.toString());
+            }
+
+            case "ASK_PORTFOLIO_CHART" -> {
+                var eChart = rota.getEntities();
+
+                String rangeChart = eChart != null && eChart.get("range") != null ? eChart.get("range").toString() : "UNSPECIFIED";
+                Integer daysChart = (eChart != null && eChart.get("days") != null) ? Integer.valueOf(eChart.get("days").toString()) : null;
+
+                ClasseAtivo filtroChart = extrairClasseFiltro(eChart, mensagem);
+
+                String url = String.format(
+                        "http://localhost:8080/api/v1/carteira/grafico?range=%s%s%s",
+                        rangeChart,
+                        (daysChart != null ? "&days=" + daysChart : ""),
+                        (filtroChart != null ? "&classe=" + filtroChart.name() : "")
+                );
+
+                yield new ChatResponse("📊 Gráfico da carteira:\n" + url + "\n\nAbre no navegador. Eu já fiz a minha parte. 😏");
+            }
+
+            case "ASK_PORTFOLIO_ASSET_DETAIL" -> {
+                var e = rota.getEntities();
+
+                if (e == null || e.get("ticker") == null || e.get("classe") == null) {
+                    yield new ChatResponse("Me diz o ativo. Ex: \"performance da PETR4 essa semana\". Eu não leio pensamento. 😏");
+                }
+
+                String range = e.get("range") != null ? e.get("range").toString() : "UNSPECIFIED";
+                Integer days = (e.get("days") != null) ? Integer.valueOf(e.get("days").toString()) : null;
+
+                var datas = PeriodoService.resolverRange(range, days);
+                var inicio = datas.get("inicio");
+                var fim = datas.get("fim");
+
+                String ticker = e.get("ticker").toString().toUpperCase();
+                ClasseAtivo classe = ClasseAtivo.valueOf(e.get("classe").toString().toUpperCase());
+
+                String resp = carteiraPerformanceService.detalharAtivoNoPeriodo(inicio, fim, classe, ticker);
+                yield new ChatResponse(resp);
             }
 
 
@@ -488,6 +557,8 @@ public class AssistenteService {
 
             default -> new ChatResponse("Não entendi. Reformula isso como se eu fosse uma IA milionária, por favor. 😏");
         };
+
+
     }
 
     private String formatarCategoria(CategoriaTransacao categoria) {
@@ -535,5 +606,15 @@ public class AssistenteService {
 
         return null; // sem filtro => tudo
     }
+
+    private ClasseAtivo extrairClasseFiltro(Map<String, Object> e, String mensagem) {
+        if (e != null && e.get("classe") != null) {
+            try {
+                return ClasseAtivo.valueOf(e.get("classe").toString().toUpperCase());
+            } catch (Exception ignored) {}
+        }
+        return inferirFiltroCarteira(mensagem); // fallback
+    }
+
 
 }

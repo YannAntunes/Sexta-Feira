@@ -6,6 +6,7 @@ import br.com.yann.sextafeira.domain.model.MovimentoCarteira;
 import br.com.yann.sextafeira.domain.model.TipoMovimentoCarteira;
 import br.com.yann.sextafeira.repository.AtivoCarteiraRepository;
 import br.com.yann.sextafeira.repository.MovimentoCarteiraRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -164,4 +165,16 @@ public class CarteiraService {
         mov.setObservacao(obs);
         movRepo.save(mov);
     }
+
+    @Autowired
+    private AtivoCarteiraRepository ativoCarteiraRepository;
+
+    public BigDecimal quantidadeAtual(ClasseAtivo classe, String ticker) {
+        return ativoCarteiraRepository
+                .findByClasseAndTicker(classe, ticker.toUpperCase())
+                .map(AtivoCarteira::getQuantidade)
+                .orElse(BigDecimal.ZERO);
+    }
+
+
 }

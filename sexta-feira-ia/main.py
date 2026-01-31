@@ -309,6 +309,20 @@ def detectar_intencao(mensagem: str) -> str:
         return "ASK_SAVING_TIPS"
     
     # ===== INVESTIMENTOS =====
+
+    if any(x in m_low for x in [
+        "grafico da carteira", "gráfico da carteira",
+        "evolucao da carteira", "evolução da carteira",
+        "grafico do patrimonio", "gráfico do patrimônio",
+        "grafico da minha carteira", "gráfico da minha carteira"
+    ]):
+        return "ASK_PORTFOLIO_CHART"
+    
+    # ===== DETALHE DE ATIVO (carteira) =====
+    if is_asset_detail_query(mensagem):
+        return "ASK_PORTFOLIO_ASSET_DETAIL"
+
+
     if any(x in m_low for x in ["carteira", "investimentos", "portfolio", "portfólio", "relatorio de fiis", "relatório de fiis",
                                 "relatorio de acoes", "relatório de ações", "relatorio de cripto", "relatório de cripto",
                                 "como está minha carteira", "como esta minha carteira"]):
@@ -485,6 +499,21 @@ def _safe_upper(s: Optional[str]) -> Optional[str]:
     s = str(s).strip()
     return s.upper() if s else None
 
+def is_asset_detail_query(msg: str) -> bool:
+    m = normalize(msg)
+
+    # palavras-chave (variações)
+    keys = [
+        "performance", "desempenho", "detalhe", "detalhar", "detalhes",
+        "como foi", "como anda", "como ta", "como está", "evolucao", "evolução",
+        "resultado", "rendendo", "rendeu", "rentabilidade", "variacao", "variação",
+        "o que aconteceu", "porque caiu", "por que caiu", "porque subiu", "por que subiu"
+    ]
+
+    # precisa ter ticker (PETR4, MXRF11, BTC, ETH etc.)
+    return any(k in m for k in keys) and (parse_ticker(msg) is not None)
+
+
 # ========= ENDPOINTS =========
 
 @app.get("/")
@@ -524,17 +553,22 @@ def router(request: MensagemRequest):
 
     m = mensagem  # seu texto original
 
-    # ✅ PRIORIDADE: carteira primeiro
-    if is_portfolio_query(m):
+    # ✅ PRIORIDADE: carteira / detalhe de ativo
+    if is_portfolio_query(m) or is_asset_detail_query(m):
         intent = "ASK_PORTFOLIO_REPORT"
+
+        if is_asset_detail_query(m):
+            intent = "ASK_PORTFOLIO_ASSET_DETAIL"
+
         entities.update(detectar_timeframe(m))
 
-        ticker = parse_ticker(m)
+        ticker = parse_ticker(mensagem)
         if ticker:
             entities["ticker"] = ticker
             entities["classe"] = infer_classe_ativo(ticker, m)
 
         return RouterResponse(intent=intent, entities=entities, lang=lang)
+
 
     # ===== TRANSACOES =====
     if intent in ["ADD_TRANSACTION", "DELETE_TRANSACTION"]:
