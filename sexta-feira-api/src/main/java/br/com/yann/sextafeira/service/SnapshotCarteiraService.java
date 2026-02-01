@@ -1,15 +1,15 @@
 package br.com.yann.sextafeira.service;
 
-import br.com.yann.sextafeira.domain.model.AtivoCarteira;
-import br.com.yann.sextafeira.domain.model.ClasseAtivo;
-import br.com.yann.sextafeira.domain.model.SnapshotCarteira;
-import br.com.yann.sextafeira.dto.PatrimonioDiaDTO;
+import br.com.yann.sextafeira.domain.model.*;
+import br.com.yann.sextafeira.dto.*;
 import br.com.yann.sextafeira.repository.SnapshotCarteiraRepository;
+import br.com.yann.sextafeira.repository.TransacaoRepository;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -111,24 +111,32 @@ public class SnapshotCarteiraService {
     }
 
     public String topMelhoresEPioresNoPeriodo(LocalDate inicio, LocalDate fim, ClasseAtivo filtro) {
+        return topMelhoresEPioresNoPeriodo(inicio, fim, filtro, 3); // default
+    }
+
+    public String topMelhoresEPioresNoPeriodo(LocalDate inicio, LocalDate fim, ClasseAtivo filtro, int topN) {
+
+        // saneamento
+        if (topN < 1) topN = 1;
+        if (topN > 20) topN = 20;
 
         LocalDate d0 = garantirSnapshotAte(inicio, filtro);
         LocalDate d1 = garantirSnapshotAte(fim, filtro);
 
         if (d0.equals(d1)) {
-            return "🏁 Top ativos:\nAinda não tenho snapshots suficientes pra ranquear o período. Eu não adivinho o passado. 😏\n";
+            return "🏁 Ranking:\nAinda não tenho snapshots suficientes pra ranquear o período. Eu não adivinho o passado. 😏\n";
         }
 
         var s0 = (filtro == null) ? repo.findByData(d0) : repo.findByDataAndClasse(d0, filtro);
         var s1 = (filtro == null) ? repo.findByData(d1) : repo.findByDataAndClasse(d1, filtro);
 
-        java.util.Map<String, SnapshotCarteira> m0 = new java.util.HashMap<>();
+        Map<String, SnapshotCarteira> m0 = new HashMap<>();
         for (var s : s0) m0.put(s.getTicker(), s);
 
-        java.util.Map<String, SnapshotCarteira> m1 = new java.util.HashMap<>();
+        Map<String, SnapshotCarteira> m1 = new HashMap<>();
         for (var s : s1) m1.put(s.getTicker(), s);
 
-        java.util.List<RankItem> itens = new java.util.ArrayList<>();
+        List<RankItem> itens = new java.util.ArrayList<>();
 
         for (String ticker : m0.keySet()) {
             if (!m1.containsKey(ticker)) continue;
@@ -139,33 +147,33 @@ public class SnapshotCarteiraService {
             BigDecimal v0 = a0.getValorBRL() == null ? BigDecimal.ZERO : a0.getValorBRL();
             BigDecimal v1 = a1.getValorBRL() == null ? BigDecimal.ZERO : a1.getValorBRL();
 
-            // ignora ativo “zerado” nos dois lados
             if (v0.compareTo(BigDecimal.ZERO) == 0 && v1.compareTo(BigDecimal.ZERO) == 0) continue;
 
             itens.add(new RankItem(ticker, a1.getClasse(), v0, v1));
         }
 
         if (itens.isEmpty()) {
-            return "🏁 Top ativos:\nNada comparável nesse período (sem interseção de snapshots). 😏\n";
+            return "🏁 Ranking:\nNada comparável nesse período (sem interseção de snapshots). 😏\n";
         }
 
-        // ordena por delta (R$)
+        // ordena por delta desc
         itens.sort((a, b) -> b.delta.compareTo(a.delta));
 
-        var melhores = itens.stream().limit(3).toList();
+        int n = Math.min(topN, itens.size());
 
-        // piores = do final
+        var melhores = itens.stream().limit(n).toList();
+
         var piores = itens.stream()
                 .sorted((a, b) -> a.delta.compareTo(b.delta))
-                .limit(3)
+                .limit(n)
                 .toList();
 
         String filtroLabel = (filtro == null) ? "" : " — filtro: " + filtro.name();
 
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("🏁 Top ativos (snapshots %s → %s)%s\n", d0, d1, filtroLabel));
+        sb.append(String.format("🏁 Ranking (snapshots %s → %s)%s\n", d0, d1, filtroLabel));
 
-        sb.append("\n🥇 Melhores (top 3):\n");
+        sb.append("\n🥇 Melhores (top ").append(n).append("):\n");
         for (var it : melhores) {
             if (it.pct != null) {
                 sb.append(String.format("- %s (%s): Δ R$ %.2f (%.2f%%)\n",
@@ -176,7 +184,7 @@ public class SnapshotCarteiraService {
             }
         }
 
-        sb.append("\n💀 Piores (top 3):\n");
+        sb.append("\n💀 Piores (top ").append(n).append("):\n");
         for (var it : piores) {
             if (it.pct != null) {
                 sb.append(String.format("- %s (%s): Δ R$ %.2f (%.2f%%)\n",
@@ -189,6 +197,8 @@ public class SnapshotCarteiraService {
 
         return sb.toString();
     }
+
+
 
 
     private static class RankItem {
@@ -215,6 +225,7 @@ public class SnapshotCarteiraService {
             }
         }
     }
+    
 
 
 }

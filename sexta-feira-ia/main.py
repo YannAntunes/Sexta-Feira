@@ -322,6 +322,8 @@ def detectar_intencao(mensagem: str) -> str:
     if is_asset_detail_query(mensagem):
         return "ASK_PORTFOLIO_ASSET_DETAIL"
 
+    if is_portfolio_top_query(mensagem):
+        return "ASK_PORTFOLIO_TOP"
 
     if any(x in m_low for x in ["carteira", "investimentos", "portfolio", "portfólio", "relatorio de fiis", "relatório de fiis",
                                 "relatorio de acoes", "relatório de ações", "relatorio de cripto", "relatório de cripto",
@@ -460,11 +462,19 @@ def parse_budget_category(msg: str) -> str | None:
 # ========= HELPERS (INVESTIMENTO) =========
 
 def parse_ticker(msg: str) -> str | None:
-    m = re.search(r"\b[A-Za-z]{2,6}\d{1,2}\b", msg.upper())
+    up = msg.upper()
+
+    # 🔒 NÃO tratar "TOP10", "TOP 10" etc como ticker
+    if re.search(r"\bTOP\s*\d{1,2}\b", up):
+        return None
+
+    # ticker bolsa BR (PETR4, MXRF11, B3SA3 etc)
+    m = re.search(r"\b[A-Z]{2,6}\d{1,2}\b", up)
     if m:
         return m.group(0)
-    # cripto simples: BTC, ETH
-    m2 = re.search(r"\b(BTC|ETH|SOL|XRP|ADA)\b", msg.upper())
+
+    # cripto simples
+    m2 = re.search(r"\b(BTC|ETH|SOL|XRP|ADA)\b", up)
     return m2.group(1) if m2 else None
 
 def infer_classe_ativo(ticker: str, msg: str) -> str:
@@ -513,6 +523,41 @@ def is_asset_detail_query(msg: str) -> bool:
     # precisa ter ticker (PETR4, MXRF11, BTC, ETH etc.)
     return any(k in m for k in keys) and (parse_ticker(msg) is not None)
 
+def is_portfolio_top_query(msg: str) -> bool:
+    m = normalize(msg)
+
+    # pega "top10", "top 10", "top:10"
+    if re.search(r"\btop\s*:?\s*\d{1,2}\b", m) or re.search(r"\btop\d{1,2}\b", m):
+        return True
+
+    # ranking/ melhores / piores, mesmo sem falar "carteira"
+    keys = [
+        "top ativos", "melhores ativos", "piores ativos",
+        "ranking", "ranking do mes", "ranking do mês",
+        "top performance", "top desempenho",
+        "melhor ativo", "pior ativo"
+    ]
+    return any(k in m for k in keys)
+
+
+
+def parse_top_n(msg: str) -> int | None:
+    m = msg.lower()
+
+    # "top 10", "top10", "top: 10", "top-10"
+    m1 = (
+        re.search(r"\btop\s*[:\-]?\s*(\d{1,2})\b", m) or
+        re.search(r"\btop(\d{1,2})\b", m)
+    )
+    if not m1:
+        return None
+
+    n = int(m1.group(1))
+    return max(1, min(n, 20))
+
+
+
+
 
 # ========= ENDPOINTS =========
 
@@ -548,26 +593,46 @@ def router(request: MensagemRequest):
     intent = detectar_intencao(mensagem)
 
     entities: Dict[str, Any] = {}
-
     entities["data"] = str(interpretar_data(mensagem))
 
-    m = mensagem  # seu texto original
+    m = mensagem  # texto original
 
-    # ✅ PRIORIDADE: carteira / detalhe de ativo
-    if is_portfolio_query(m) or is_asset_detail_query(m):
-        intent = "ASK_PORTFOLIO_REPORT"
-
-        if is_asset_detail_query(m):
+    # ✅ PRIORIDADE: carteira / detalhe / ranking
+    if is_portfolio_top_query(m) or is_portfolio_query(m) or is_asset_detail_query(m):
+        # decide intent final
+        if is_portfolio_top_query(m):
+            intent = "ASK_PORTFOLIO_TOP"
+        elif is_asset_detail_query(m):
             intent = "ASK_PORTFOLIO_ASSET_DETAIL"
+        else:
+            intent = "ASK_PORTFOLIO_REPORT"
 
+        # timeframe sempre (range/days)
         entities.update(detectar_timeframe(m))
 
-        ticker = parse_ticker(mensagem)
+        # ✅ top_n só quando for ranking
+        if intent == "ASK_PORTFOLIO_TOP":
+            top_n = parse_top_n(m)
+            if top_n:
+                entities["top_n"] = top_n
+
+        # ticker/classe só quando fizer sentido
+        # (detail precisa, report/top é opcional)
+        ticker = parse_ticker(m)
         if ticker:
             entities["ticker"] = ticker
             entities["classe"] = infer_classe_ativo(ticker, m)
 
         return RouterResponse(intent=intent, entities=entities, lang=lang)
+    
+    # força timeframe quando a frase vier do tipo "ranking do mês/semana"
+    mm = normalize(m)
+    if "do mes" in mm or "do mês" in mm:
+        entities.update({"range": "THIS_MONTH"})
+    elif "da semana" in mm:
+        entities.update({"range": "THIS_WEEK"})
+    else:
+        entities.update(detectar_timeframe(m))
 
 
     # ===== TRANSACOES =====
@@ -588,14 +653,14 @@ def router(request: MensagemRequest):
         entities.update(conv)
         return RouterResponse(intent=intent, entities=entities, lang=lang)
 
-    # ===== CARTEIRA (intents) =====
+    # ===== CARTEIRA (movimentos) =====
     if intent in ["ADD_HOLDING_QTY", "SELL_HOLDING_QTY", "ADD_HOLDING_VALUE", "ASK_PORTFOLIO_REPORT"]:
-        ticker = parse_ticker(mensagem)
+        ticker = parse_ticker(m)
         if ticker:
             entities["ticker"] = ticker
-            entities["classe"] = infer_classe_ativo(ticker, mensagem)
+            entities["classe"] = infer_classe_ativo(ticker, m)
 
-        amt = parse_amount(mensagem)
+        amt = parse_amount(m)
         if amt is not None:
             if intent == "ADD_HOLDING_VALUE":
                 entities["value_brl"] = amt
@@ -603,17 +668,18 @@ def router(request: MensagemRequest):
                 entities["qty"] = amt
 
         if intent == "ASK_PORTFOLIO_REPORT":
-            entities.update(detectar_timeframe(mensagem))
+            entities.update(detectar_timeframe(m))
 
         return RouterResponse(intent=intent, entities=entities, lang=lang)
 
     # ===== TIMEFRAME (Resumo por período) =====
     if intent == "ASK_PERIOD_SUMMARY":
-        entities.update(detectar_timeframe(mensagem))
+        entities.update(detectar_timeframe(m))
         return RouterResponse(intent=intent, entities=entities, lang=lang)
 
-    # ✅ FALLBACK FINAL (NUNCA retorna None)
+    # ✅ FALLBACK FINAL
     return RouterResponse(intent=intent, entities=entities, lang=lang)
+
 
 
 

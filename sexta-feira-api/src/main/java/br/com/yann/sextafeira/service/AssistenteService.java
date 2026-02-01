@@ -14,6 +14,7 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.Map;
 
+
 @Service
 public class AssistenteService {
 
@@ -25,23 +26,26 @@ public class AssistenteService {
     private final RelatorioService relatorioService;
     private final EconomiaService economiaService;
     private final FrasesService frasesService;
+
     private final CarteiraRelatorioService carteiraRelatorioService;
     private final CarteiraService carteiraService;
     private final CarteiraPerformanceService carteiraPerformanceService;
     private final SnapshotCarteiraService snapshotCarteiraService;
 
-    public AssistenteService(TransacaoIaService transacaoIaService,
-                             TransacaoRepository transacaoRepository,
-                             TransacaoService transacaoService,
-                             OrcamentoService orcamentoService,
-                             CurrencyService currencyService,
-                             RelatorioService relatorioService,
-                             EconomiaService economiaService,
-                             FrasesService frasesService,
-                             CarteiraRelatorioService carteiraRelatorioService,
-                             CarteiraService carteiraService,
-                             CarteiraPerformanceService carteiraPerformanceService,
-                             SnapshotCarteiraService snapshotCarteiraService) {
+    public AssistenteService(
+            TransacaoIaService transacaoIaService,
+            TransacaoRepository transacaoRepository,
+            TransacaoService transacaoService,
+            OrcamentoService orcamentoService,
+            CurrencyService currencyService,
+            RelatorioService relatorioService,
+            EconomiaService economiaService,
+            FrasesService frasesService,
+            CarteiraRelatorioService carteiraRelatorioService,
+            CarteiraService carteiraService,
+            CarteiraPerformanceService carteiraPerformanceService,
+            SnapshotCarteiraService snapshotCarteiraService
+    ) {
         this.transacaoIaService = transacaoIaService;
         this.transacaoRepository = transacaoRepository;
         this.transacaoService = transacaoService;
@@ -50,6 +54,7 @@ public class AssistenteService {
         this.relatorioService = relatorioService;
         this.economiaService = economiaService;
         this.frasesService = frasesService;
+
         this.carteiraRelatorioService = carteiraRelatorioService;
         this.carteiraService = carteiraService;
         this.carteiraPerformanceService = carteiraPerformanceService;
@@ -459,6 +464,53 @@ public class AssistenteService {
 
                 yield new ChatResponse(sb.toString());
             }
+
+            case "ASK_PORTFOLIO_TOP" -> {
+                var e = rota.getEntities();
+
+                String range = e != null && e.get("range") != null
+                        ? e.get("range").toString()
+                        : "UNSPECIFIED";
+
+                Integer days = (e != null && e.get("days") != null)
+                        ? Integer.valueOf(e.get("days").toString())
+                        : null;
+
+                // ✅ TOP N (default = 5)
+                int topN = 5;
+                if (e != null && e.get("top_n") != null) {
+                    topN = Integer.parseInt(e.get("top_n").toString());
+                }
+
+                var datas = PeriodoService.resolverRange(range, days);
+                var inicio = datas.get("inicio");
+                var fim = datas.get("fim");
+
+                ClasseAtivo filtro = extrairClasseFiltro(e, mensagem);
+
+                String ranking = snapshotCarteiraService
+                        .topMelhoresEPioresNoPeriodo(inicio, fim, filtro, topN);
+
+                String label = switch (range) {
+                    case "TODAY" -> "hoje";
+                    case "YESTERDAY" -> "ontem";
+                    case "THIS_WEEK" -> "essa semana";
+                    case "LAST_WEEK" -> "semana passada";
+                    case "THIS_MONTH" -> "esse mês";
+                    case "LAST_MONTH" -> "mês passado";
+                    case "LAST_N_DAYS" -> "últimos " + (days == null ? 7 : days) + " dias";
+                    default -> "no período";
+                };
+
+                String filtroLabel = (filtro == null) ? "" : " — filtro: " + filtro.name();
+
+                String resp = "📌 Ranking da carteira " + label + filtroLabel + "\n\n"
+                        + ranking
+                        + "\nQuer o gráfico também? Diz: \"gráfico da carteira\" 😏";
+
+                yield new ChatResponse(resp);
+            }
+
 
             case "ASK_PORTFOLIO_CHART" -> {
                 var eChart = rota.getEntities();
