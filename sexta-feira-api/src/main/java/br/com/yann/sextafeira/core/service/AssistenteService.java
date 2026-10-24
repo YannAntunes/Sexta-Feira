@@ -2,7 +2,13 @@ package br.com.yann.sextafeira.core.service;
 
 import br.com.yann.sextafeira.core.dto.ChatResponse;
 import br.com.yann.sextafeira.core.dto.ConvertRequest;
+import br.com.yann.sextafeira.core.domain.model.Personalidade;
+import br.com.yann.sextafeira.core.dto.HistoricoMensagemDTO;
 import br.com.yann.sextafeira.core.dto.IaRouterResponse;
+import br.com.yann.sextafeira.identity.repository.UsuarioRepository;
+import br.com.yann.sextafeira.identity.context.UsuarioContextHolder;
+import br.com.yann.sextafeira.identity.domain.Usuario;
+import br.com.yann.sextafeira.identity.service.UsuarioService;
 import br.com.yann.sextafeira.modes.finance.domain.model.CategoriaTransacao;
 import br.com.yann.sextafeira.modes.finance.domain.model.ClasseAtivo;
 import br.com.yann.sextafeira.modes.finance.domain.model.TipoTransacao;
@@ -11,7 +17,6 @@ import br.com.yann.sextafeira.modes.finance.dto.OrcamentoRequest;
 import br.com.yann.sextafeira.modes.finance.dto.PatrimonioDiaDTO;
 import br.com.yann.sextafeira.modes.finance.dto.ResumoMensalDTO;
 import br.com.yann.sextafeira.modes.finance.service.*;
-import br.com.yann.sextafeira.modes.finance.domain.repository.TransacaoRepository;
 import br.com.yann.sextafeira.modes.finance.service.ai.TransacaoIaService;
 import org.springframework.stereotype.Service;
 
@@ -27,7 +32,7 @@ import java.util.Map;
 public class AssistenteService {
 
     private final TransacaoIaService transacaoIaService;
-    private final TransacaoRepository transacaoRepository;
+    private final UsuarioService usuarioService;
     private final TransacaoService transacaoService;
     private final OrcamentoService orcamentoService;
     private final CurrencyService currencyService;
@@ -39,10 +44,12 @@ public class AssistenteService {
     private final CarteiraService carteiraService;
     private final CarteiraPerformanceService carteiraPerformanceService;
     private final SnapshotCarteiraService snapshotCarteiraService;
+    private final UsuarioRepository usuarioRepository;
+    private final MensagemHistoricoService mensagemHistoricoService;
 
     public AssistenteService(
             TransacaoIaService transacaoIaService,
-            TransacaoRepository transacaoRepository,
+            UsuarioService usuarioService,
             TransacaoService transacaoService,
             OrcamentoService orcamentoService,
             CurrencyService currencyService,
@@ -52,10 +59,14 @@ public class AssistenteService {
             CarteiraRelatorioService carteiraRelatorioService,
             CarteiraService carteiraService,
             CarteiraPerformanceService carteiraPerformanceService,
-            SnapshotCarteiraService snapshotCarteiraService
+            SnapshotCarteiraService snapshotCarteiraService,
+            UsuarioRepository usuarioRepository,
+            MensagemHistoricoService mensagemHistoricoService
     ) {
+        this.usuarioRepository = usuarioRepository;
+        this.mensagemHistoricoService = mensagemHistoricoService;
         this.transacaoIaService = transacaoIaService;
-        this.transacaoRepository = transacaoRepository;
+        this.usuarioService = usuarioService;
         this.transacaoService = transacaoService;
         this.orcamentoService = orcamentoService;
         this.currencyService = currencyService;
@@ -70,26 +81,65 @@ public class AssistenteService {
     }
 
     public ChatResponse processarMensagem(String mensagem) {
+        return processarMensagem(usuarioService.obterUsuarioAtual(), mensagem);
+    }
 
-        IaRouterResponse rota = transacaoIaService.rotearMensagem(mensagem);
-        String intent = rota.getIntent();
+    /**
+     * Processa a mensagem no contexto explícito do usuário informado.
+     * O usuário é vinculado ao UsuarioContextHolder durante o processamento para que todos os
+     * serviços financeiros (que resolvem o usuário atual) fiquem isolados nele.
+     */
+    public ChatResponse processarMensagem(Usuario usuario, String mensagem) {
+        if (usuario == null) {
+            throw new IllegalArgumentException("Usuário obrigatório para processar a mensagem.");
+        }
+        Usuario anterior = UsuarioContextHolder.getUsuario();
+        UsuarioContextHolder.setUsuario(usuario);
+        try {
+            return processarNoContexto(usuario, mensagem);
+        } catch (IllegalArgumentException ex) {
+            // Erros de regra de negócio (ex.: venda sem saldo, valor inválido) viram resposta amigável.
+            return new ChatResponse("Não consegui concluir: " + ex.getMessage());
+        } finally {
+            if (anterior == null) UsuarioContextHolder.clear();
+            else UsuarioContextHolder.setUsuario(anterior);
+        }
+    }
 
-        return switch (intent) {
+    private ChatResponse processarNoContexto(Usuario usuario, String mensagem) {
+        if (mensagem == null || mensagem.isBlank()) {
+            return new ChatResponse(frasesService.escolher(usuario.getPersonalidade(), "MSG_VAZIA"));
+        }
+
+        List<HistoricoMensagemDTO> historico = mensagemHistoricoService.obterHistoricoRecente(usuario, 6);
+
+        IaRouterResponse rota;
+        try {
+            rota = transacaoIaService.rotearMensagem(mensagem, usuario.getPersonalidade().name(), historico);
+        } catch (Exception ex) {
+            return new ChatResponse("Meu módulo de análise (Python) está offline ou demorou pra responder. Tenta de novo em instantes.");
+        }
+        String intent = rota.getIntent() != null ? rota.getIntent() : "UNKNOWN";
+
+        // Registra a mensagem do usuário no histórico conversacional
+        mensagemHistoricoService.registrarMensagemUsuario(usuario, mensagem, intent);
+
+        ChatResponse respostaFinal = switch (intent) {
 
             case "ADD_TRANSACTION" -> {
                 Transacao interpretada = transacaoIaService.interpretarMensagem(mensagem);
-                Transacao salva = transacaoRepository.save(interpretada);
+                Transacao salva = transacaoService.salvar(interpretada);
 
                 String resposta;
                 if (salva.getTipo() == TipoTransacao.RECEITA) {
                     resposta = String.format(
-                            frasesService.escolher("ADD_RECEITA"),
+                            frasesService.escolher(usuario.getPersonalidade(), "ADD_RECEITA"),
                             salva.getValor(),
                             formatarCategoria(salva.getCategoria())
                     );
                 } else {
                     resposta = String.format(
-                            frasesService.escolher("ADD_DESPESA"),
+                            frasesService.escolher(usuario.getPersonalidade(), "ADD_DESPESA"),
                             salva.getValor(),
                             formatarCategoria(salva.getCategoria())
                     );
@@ -112,7 +162,7 @@ public class AssistenteService {
 
                         if (gasto.compareTo(limite) > 0) {
                             resposta += "\n\n" + String.format(
-                                    frasesService.escolher("BUDGET_ESTOURO"),
+                                    frasesService.escolher(usuario.getPersonalidade(), "BUDGET_ESTOURO"),
                                     formatarCategoria(salva.getCategoria())
                             );
                         } else {
@@ -121,12 +171,12 @@ public class AssistenteService {
 
                             if (perc.compareTo(BigDecimal.valueOf(90)) >= 0) {
                                 resposta += "\n\n" + String.format(
-                                        frasesService.escolher("BUDGET_90"),
+                                        frasesService.escolher(usuario.getPersonalidade(), "BUDGET_90"),
                                         formatarCategoria(salva.getCategoria())
                                 );
                             } else if (perc.compareTo(BigDecimal.valueOf(80)) >= 0) {
                                 resposta += "\n\n" + String.format(
-                                        frasesService.escolher("BUDGET_80"),
+                                        frasesService.escolher(usuario.getPersonalidade(), "BUDGET_80"),
                                         formatarCategoria(salva.getCategoria())
                                 );
                             }
@@ -145,7 +195,7 @@ public class AssistenteService {
                         removida.getValor(),
                         formatarCategoria(removida.getCategoria()),
                         removida.getData(),
-                        frasesService.escolher("DELETE_OK")
+                        frasesService.escolher(usuario.getPersonalidade(), "DELETE_OK")
                 ));
 
             }
@@ -171,7 +221,8 @@ public class AssistenteService {
             }
 
             case "ASK_BUDGET_STATUS" -> {
-                CategoriaTransacao categoria = inferirCategoriaPorTexto(mensagem);
+                CategoriaTransacao categoria = categoriaDasEntidades(rota.getEntities());
+                if (categoria == null) categoria = inferirCategoriaPorTexto(mensagem);
 
                 YearMonth agora = YearMonth.from(LocalDate.now());
                 var status = orcamentoService.consultarStatus(agora.getYear(), agora.getMonthValue(), categoria);
@@ -632,15 +683,46 @@ public class AssistenteService {
                 ));
             }
 
-            default -> new ChatResponse("Não entendi. Reformula isso como se eu fosse uma IA milionária, por favor. 😏");
+            case "SET_PERSONALITY" -> {
+                Personalidade nova = extrairPersonalidade(rota.getEntities(), mensagem);
+                usuario.setPersonalidade(nova);
+                usuarioRepository.save(usuario);
+                yield new ChatResponse(frasesService.escolher(nova, "SET_PERSONALIDADE_OK"));
+            }
+
+            default -> new ChatResponse(frasesService.escolher(usuario.getPersonalidade(), "ERRO_UNKNOWN"));
         };
 
+        // Registra a resposta do assistente no histórico conversacional
+        mensagemHistoricoService.registrarRespostaAssistente(usuario, respostaFinal.getResposta(), intent);
+        return respostaFinal;
+    }
 
+    private Personalidade extrairPersonalidade(Map<String, Object> e, String mensagem) {
+        if (e != null && e.get("personality") != null) {
+            try {
+                return Personalidade.valueOf(e.get("personality").toString().toUpperCase());
+            } catch (IllegalArgumentException ignored) {}
+        }
+        String m = mensagem.toLowerCase();
+        if (m.contains("formal")) return Personalidade.FORMAL;
+        if (m.contains("jarvis")) return Personalidade.JARVIS;
+        if (m.contains("amigavel") || m.contains("amigável")) return Personalidade.AMIGAVEL;
+        return Personalidade.SEXTA_FEIRA;
     }
 
     private String formatarCategoria(CategoriaTransacao categoria) {
         String s = categoria.name().toLowerCase().replace("_", " ");
         return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    private CategoriaTransacao categoriaDasEntidades(Map<String, Object> e) {
+        if (e == null || e.get("category") == null) return null;
+        try {
+            return CategoriaTransacao.valueOf(e.get("category").toString().toUpperCase());
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     private CategoriaTransacao inferirCategoriaPorTexto(String mensagem) {

@@ -1,15 +1,22 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Dict, Optional
 import re
 from typing import List
 from fastapi.responses import StreamingResponse
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import io
 import unicodedata
 import traceback
+import os
+import json
+import urllib.request
+import urllib.error
 
 
 app = FastAPI(title="SEXTA-FEIRA IA Service")
@@ -18,7 +25,9 @@ app = FastAPI(title="SEXTA-FEIRA IA Service")
 # ========= MODELS =========
 
 class MensagemRequest(BaseModel):
-    mensagem: str
+    mensagem: str = Field(..., min_length=1, max_length=1000)
+    personalidade: Optional[str] = None
+    historico: Optional[List[Dict[str, Any]]] = None
 
 
 class TransacaoInterpretada(BaseModel):
@@ -70,9 +79,43 @@ class IaRouterResponse(BaseModel):
 
 # ========= HELPERS (TRANSAÇÃO) =========
 
+def _limpar_tokens_nao_monetarios(mensagem: str) -> str:
+    limpa = mensagem
+    # Remove datas dd/mm(/yyyy) ou dd-mm(-yyyy)
+    limpa = re.sub(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", " ", limpa)
+    # Remove "dia 15"
+    limpa = re.sub(r"\bdia\s+\d{1,2}\b", " ", limpa, flags=re.IGNORECASE)
+    # Remove "15 de janeiro"
+    limpa = re.sub(
+        r"\b\d{1,2}\s+de\s+(?:janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b",
+        " ",
+        limpa,
+        flags=re.IGNORECASE,
+    )
+    # Remove "há N dias" / "últimos N dias" / "N days ago" / "last N days"
+    limpa = re.sub(r"\b(?:há|ha|últimos|ultimos|last)\s+\d+\s+(?:dias|days)\b", " ", limpa, flags=re.IGNORECASE)
+    limpa = re.sub(r"\b\d+\s+days\s+ago\b", " ", limpa, flags=re.IGNORECASE)
+    # Remove tickers da B3 (ex: PETR4, MXRF11, B3SA3) para não capturar o dígito final
+    limpa = re.sub(r"\b[A-Za-z]{4}\d{1,2}\b", " ", limpa)
+    limpa = re.sub(r"\bB3SA3\b", " ", limpa, flags=re.IGNORECASE)
+    return limpa
+
+
 def extrair_valor(mensagem: str) -> Decimal | None:
-    padrao = r"\d+[.,]?\d*"
-    match = re.search(padrao, mensagem.replace(",", "."))
+    # 1) Prioriza valor explícito com R$ ou seguido de reais/real
+    m_brl = re.search(r"r\$\s*(\d+(?:[.,]\d+)?)", mensagem, flags=re.IGNORECASE)
+    if not m_brl:
+        m_brl = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:reais|real)\b", mensagem, flags=re.IGNORECASE)
+    if m_brl:
+        try:
+            return Decimal(m_brl.group(1).replace(",", "."))
+        except Exception:
+            pass
+
+    # 2) Limpa datas e tickers antes de buscar número geral
+    limpa = _limpar_tokens_nao_monetarios(mensagem)
+    padrao = r"\d+(?:[.,]\d+)?"
+    match = re.search(padrao, limpa.replace(",", "."))
     if match:
         try:
             return Decimal(match.group())
@@ -236,8 +279,101 @@ def interpretar_data(mensagem: str) -> date:
     return hoje
 
 
+
+def parse_personality(mensagem: str) -> str:
+    m = mensagem.lower()
+    if "formal" in m:
+        return "FORMAL"
+    if "jarvis" in m:
+        return "JARVIS"
+    if "amigavel" in m or "amigável" in m:
+        return "AMIGAVEL"
+    return "SEXTA_FEIRA"
+
+
+def is_llm_enabled() -> bool:
+    val = os.getenv("LLM_ENABLED", "false").strip().lower()
+    return val in ("true", "1", "yes", "on")
+
+
+def tentar_roteamento_llm(request: MensagemRequest) -> Optional[RouterResponse]:
+    if not is_llm_enabled():
+        return None
+
+    api_key = os.getenv("LLM_API_KEY", "").strip()
+    base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    try:
+        timeout = float(os.getenv("LLM_TIMEOUT_SECONDS", "3.5"))
+    except ValueError:
+        timeout = 3.5
+
+    # Se for endpoint remoto e não tiver chave nem for localhost, aborta para fallback imediato
+    if not api_key and "localhost" not in base_url and "127.0.0.1" not in base_url:
+        return None
+
+    system_prompt = (
+        "Você é o roteador de intenções financeiras do assistente Sexta-Feira. "
+        "Seu papel é analisar a mensagem do usuário (e o histórico de diálogo, se houver) e retornar "
+        "estritamente um objeto JSON com as chaves: 'intent' e 'entities'.\n"
+        "Intenções permitidas: ADD_TRANSACTION, DELETE_TRANSACTION, ASK_PERIOD_SUMMARY, ASK_MONTH_SUMMARY, "
+        "ASK_MONTH_REPORT, SET_BUDGET, ASK_BUDGET_STATUS, ASK_BUDGET_OVERVIEW, CONVERT_CURRENCY, "
+        "ASK_SAVING_TIPS, ASK_PORTFOLIO_REPORT, ASK_PORTFOLIO_CHART, ASK_PORTFOLIO_TOP, "
+        "ASK_PORTFOLIO_ASSET_DETAIL, ADD_HOLDING_QTY, ADD_HOLDING_VALUE, SELL_HOLDING_QTY, SET_PERSONALITY, UNKNOWN.\n"
+        "Retorne APENAS o JSON puro, sem blocos de markdown e sem explicações."
+    )
+
+    messages = [{"role": "system", "content": system_prompt}]
+    if request.historico:
+        for h in request.historico[-6:]:
+            if isinstance(h, dict) and "role" in h and "content" in h:
+                messages.append({"role": str(h["role"]), "content": str(h["content"])})
+    messages.append({"role": "user", "content": request.mensagem})
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"}
+    }
+
+    url = f"{base_url}/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return None
+            body = json.loads(resp.read().decode("utf-8"))
+            raw_content = body["choices"][0]["message"]["content"]
+            parsed = json.loads(raw_content)
+            intent = parsed.get("intent", "UNKNOWN")
+            entities = parsed.get("entities", {})
+            if not isinstance(entities, dict):
+                entities = {}
+            return RouterResponse(intent=intent, entities=entities, lang="pt")
+    except Exception:
+        # Fallback determinístico transparente em caso de indisponibilidade, timeout ou erro
+        return None
+
 def detectar_intencao(mensagem: str) -> str:
     m_low = mensagem.lower()
+
+    # SET PERSONALITY (alteração de personalidade)
+    if any(x in m_low for x in ["modo", "personalidade"]) and any(x in m_low for x in [
+        "formal", "amigavel", "amigável", "jarvis", "sexta-feira", "sexta feira", "padrao", "padrão"
+    ]):
+        return "SET_PERSONALITY"
+    if any(x in m_low for x in ["seja mais formal", "seja formal", "ative o jarvis", "ative jarvis", "seja mais amigável", "seja amigavel", "seja amigável"]):
+        return "SET_PERSONALITY"
 
     if any(x in m_low for x in [
         "apaga", "apagar", "remove", "remover",
@@ -246,11 +382,12 @@ def detectar_intencao(mensagem: str) -> str:
     ]):
         return "DELETE_TRANSACTION"
 
+    # Consultas de gastos/período ANTES de ADD_TRANSACTION para não colidir com "gastei"
     if any(x in m_low for x in [
-        "gastei", "paguei", "comprei", "recebi", "ganhei",
-        "spent", "paid", "bought", "received", "earned"
+        "quanto gastei", "quanto eu gastei", "gastei quanto",
+        "how much i spent", "how much did i spend", "how much spent"
     ]):
-        return "ADD_TRANSACTION"
+        return "ASK_PERIOD_SUMMARY"
 
     if any(x in m_low for x in [
         "relatório do mês", "relatorio do mes", "relatório mensal", "relatorio mensal",
@@ -259,8 +396,13 @@ def detectar_intencao(mensagem: str) -> str:
         "monthly report", "month report", "full report", "report this month"
     ]):
         return "ASK_MONTH_REPORT"
-    
-        # SET BUDGET 
+
+    if any(x in m_low for x in [
+        "resumo do mês", "resumo do mes", "resumo mensal", "saldo do mês", "saldo do mes"
+    ]):
+        return "ASK_MONTH_SUMMARY"
+
+    # SET BUDGET
     if any(x in m_low for x in [
         "definir", "define", "defina",
         "ajustar", "ajusta", "ajuste",
@@ -269,7 +411,7 @@ def detectar_intencao(mensagem: str) -> str:
     ]) and any(x in m_low for x in ["orçamento", "orcamento", "budget"]):
         return "SET_BUDGET"
 
-        # BUDGET OVERVIEW (resumo geral)
+    # BUDGET OVERVIEW (resumo geral)
     if any(x in m_low for x in [
         "resumo do orçamento", "resumo dos orçamentos", "orçamento geral", "orcamento geral",
         "como estão meus orçamentos", "como estao meus orcamentos",
@@ -289,68 +431,67 @@ def detectar_intencao(mensagem: str) -> str:
         "dólar", "dolar", "usd", "euro", "eur", "real", "brl", "convert", "converter", "converte"
     ]):
         return "CONVERT_CURRENCY"
-    
-        # PERIOD REPORT (gastos por período)
-    if any(x in m_low for x in [
-        "gastos de", "quanto gastei", "quanto eu gastei", "gastei quanto",
-        "últimos", "last", "essa semana", "esta semana", "semana passada",
-        "hoje", "ontem", "this week", "yesterday", "today"
-    ]):
-        # cuidado: não roubar do relatório mensal completo
-        if "relatório" not in m_low and "relatorio" not in m_low:
-            return "ASK_PERIOD_SUMMARY"
-        
-        # SAVING TIPS
+
+    # SAVING TIPS
     if any(x in m_low for x in [
         "economizar", "economia", "cortar gastos", "reduzir gastos",
         "onde dá pra economizar", "como economizar", "dicas de economia",
         "saving tips", "how can i save", "cut expenses"
     ]):
         return "ASK_SAVING_TIPS"
-    
-    # ===== INVESTIMENTOS =====
 
+    # ===== INVESTIMENTOS (antes de ADD_TRANSACTION para que "comprei 10 ações da PETR4" seja investimento) =====
     if any(x in m_low for x in [
         "grafico da carteira", "gráfico da carteira",
+        "grafico carteira", "gráfico carteira",
         "evolucao da carteira", "evolução da carteira",
         "grafico do patrimonio", "gráfico do patrimônio",
-        "grafico da minha carteira", "gráfico da minha carteira"
+        "grafico da minha carteira", "gráfico da minha carteira",
+        "grafico portfolio", "gráfico portfólio"
     ]):
         return "ASK_PORTFOLIO_CHART"
-    
-    # ===== DETALHE DE ATIVO (carteira) =====
+
     if is_asset_detail_query(mensagem):
         return "ASK_PORTFOLIO_ASSET_DETAIL"
 
     if is_portfolio_top_query(mensagem):
         return "ASK_PORTFOLIO_TOP"
 
-    if any(x in m_low for x in ["carteira", "investimentos", "portfolio", "portfólio", "relatorio de fiis", "relatório de fiis",
-                                "relatorio de acoes", "relatório de ações", "relatorio de cripto", "relatório de cripto",
-                                "como está minha carteira", "como esta minha carteira"]):
-        return "ASK_PORTFOLIO_REPORT"
-
-    if any(x in m_low for x in ["adicionar", "adicione", "comprar", "compre", "aporte", "investi", "investir"]) and any(
-        x in m_low for x in ["btc", "eth", "bitcoin", "ethereum", "petr4", "b3sa3", "bbas3", "mxrf11", "fii", "acao", "ações", "acoes", "cripto"]
+    if any(x in m_low for x in ["adicionar", "adicione", "comprar", "compre", "comprei", "aporte", "investi", "investir"]) and (
+        any(x in m_low for x in ["btc", "eth", "bitcoin", "ethereum", "petr4", "b3sa3", "bbas3", "mxrf11", "fii", "fiis", "acao", "ações", "acoes", "cripto"])
+        or parse_ticker(mensagem) is not None
     ):
-        # por enquanto: se vier "reais" assume ADD_HOLDING_VALUE, senão quantidade
         if any(x in m_low for x in ["real", "reais", "r$"]):
             return "ADD_HOLDING_VALUE"
         return "ADD_HOLDING_QTY"
 
-    if any(x in m_low for x in ["vendi", "vender", "venda", "sell", "sold"]):
+    if any(x in m_low for x in ["vendi", "vender", "venda", "sell", "sold"]) and (
+        any(x in m_low for x in ["btc", "eth", "bitcoin", "ethereum", "fii", "fiis", "acao", "ações", "acoes", "cripto"])
+        or parse_ticker(mensagem) is not None
+    ):
         return "SELL_HOLDING_QTY"
-    
-    # ===== INVESTIMENTOS (gráfico carteira) =====
-    if any(x in m_low for x in [
-        "grafico da carteira", "gráfico da carteira",
-        "grafico carteira", "gráfico carteira",
-        "evolucao da carteira", "evolução da carteira",
-        "grafico do patrimonio", "gráfico do patrimônio",
-        "grafico portfolio", "gráfico portfólio"
-    ]):
-        return "ASK_PORTFOLIO_GRAPH"
 
+    if any(x in m_low for x in [
+        "carteira", "investimentos", "portfolio", "portfólio", "relatorio de fiis", "relatório de fiis",
+        "relatorio de acoes", "relatório de ações", "relatorio de cripto", "relatório de cripto",
+        "como está minha carteira", "como esta minha carteira"
+    ]):
+        return "ASK_PORTFOLIO_REPORT"
+
+    # ADD TRANSACTION (após verificar se não era pergunta ou compra de ativo da carteira)
+    if any(x in m_low for x in [
+        "gastei", "paguei", "comprei", "recebi", "ganhei",
+        "spent", "paid", "bought", "received", "earned"
+    ]):
+        return "ADD_TRANSACTION"
+
+    # PERIOD REPORT (gastos por período sem verbo de gasto direto)
+    if any(x in m_low for x in [
+        "gastos de", "últimos", "last", "essa semana", "esta semana", "semana passada",
+        "hoje", "ontem", "this week", "yesterday", "today"
+    ]):
+        if "relatório" not in m_low and "relatorio" not in m_low:
+            return "ASK_PERIOD_SUMMARY"
 
     return "UNKNOWN"
 
@@ -370,10 +511,10 @@ CURRENCY_MAP = {
 }
 
 def parse_amount(text: str) -> float | None:
-    m = re.search(r"(\d+(?:[.,]\d+)?)", text)
-    if not m:
+    val = extrair_valor(text)
+    if val is None:
         return None
-    return float(m.group(1).replace(",", "."))
+    return float(val)
 
 def parse_currencies(text: str) -> list[str]:
     tokens = re.findall(r"[A-Za-zÀ-ÿ]+", text.lower())
@@ -684,6 +825,17 @@ def router(request: MensagemRequest):
         })
         return RouterResponse(intent=intent, entities=entities, lang=lang)
 
+    # ===== ORÇAMENTO (SET_BUDGET / ASK_BUDGET_STATUS) =====
+    if intent == "SET_BUDGET":
+        entities.update(parse_budget_entities(m))
+        return RouterResponse(intent=intent, entities=entities, lang=lang)
+
+    if intent == "ASK_BUDGET_STATUS":
+        cat = parse_budget_category(m)
+        if cat:
+            entities["category"] = cat
+        return RouterResponse(intent=intent, entities=entities, lang=lang)
+
     # ===== CONVERSAO =====
     if intent == "CONVERT_CURRENCY":
         conv = parse_convert_entities(m)
@@ -714,6 +866,11 @@ def router(request: MensagemRequest):
         entities.update(detectar_timeframe(m))
         return RouterResponse(intent=intent, entities=entities, lang=lang)
 
+    # ===== PERSONALIDADE =====
+    if intent == "SET_PERSONALITY":
+        entities["personality"] = parse_personality(m)
+        return RouterResponse(intent=intent, entities=entities, lang=lang)
+
     return RouterResponse(intent=intent, entities=entities, lang=lang)
 
 @app.post("/ia/charts/gastos-por-categoria")
@@ -722,17 +879,18 @@ def chart_gastos_por_categoria(req: ChartCategoriaRequest):
     categorias = [i.categoria for i in req.items]
     totais = [i.total for i in req.items]
 
-    fig = plt.figure(figsize=(9, 4.5))
-    plt.bar(categorias, totais)
-    plt.title(req.titulo)
-    plt.ylabel("R$")
-
-    plt.xticks(rotation=30, ha="right")
-    plt.tight_layout()
+    fig = Figure(figsize=(9, 4.5))
+    ax = fig.subplots()
+    ax.bar(categorias, totais)
+    ax.set_title(req.titulo)
+    ax.set_ylabel("R$")
+    ax.tick_params(axis="x", rotation=30)
+    for label in ax.get_xticklabels():
+        label.set_horizontalalignment("right")
+    fig.tight_layout()
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=150)
-    plt.close(fig)
+    fig.savefig(buf, format="png", dpi=150)
     buf.seek(0)
 
     return StreamingResponse(buf, media_type="image/png")
@@ -744,23 +902,25 @@ def chart_orcamento_vs_gasto(req: ChartBudgetRequest):
     orcamentos = [i.orcamento for i in req.items]
     gastos = [i.gasto for i in req.items]
 
-    fig = plt.figure(figsize=(10, 4.8))
+    fig = Figure(figsize=(10, 4.8))
+    ax = fig.subplots()
 
-    x = range(len(categorias))
+    x = list(range(len(categorias)))
     width = 0.40
 
-    plt.bar([i - width/2 for i in x], orcamentos, width=width, label="Orçamento")
-    plt.bar([i + width/2 for i in x], gastos, width=width, label="Gasto")
+    ax.bar([i - width/2 for i in x], orcamentos, width=width, label="Orçamento")
+    ax.bar([i + width/2 for i in x], gastos, width=width, label="Gasto")
 
-    plt.title(req.titulo)
-    plt.ylabel("R$")
-    plt.xticks(list(x), categorias, rotation=30, ha="right")
-    plt.legend()
-    plt.tight_layout()
+    ax.set_title(req.titulo)
+    ax.set_ylabel("R$")
+    ax.set_xticks(x)
+    ax.set_xticklabels(categorias, rotation=30, ha="right")
+    if categorias:
+        ax.legend()
+    fig.tight_layout()
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=150)
-    plt.close(fig)
+    fig.savefig(buf, format="png", dpi=150)
     buf.seek(0)
 
     return StreamingResponse(buf, media_type="image/png")
@@ -771,23 +931,27 @@ def chart_serie_linha(req: ChartSerieRequest):
     labels = [i.label for i in req.items]
     values = [i.value for i in req.items]
 
-    fig = plt.figure(figsize=(10, 4.8))
-    plt.plot(labels, values, marker="o")
-    plt.title(req.titulo)
-    plt.ylabel(req.y_label)
+    fig = Figure(figsize=(10, 4.8))
+    ax = fig.subplots()
+    ax.plot(labels, values, marker="o")
+    ax.set_title(req.titulo)
+    ax.set_ylabel(req.y_label)
 
     # se tiver muitos pontos, não deixa ilegível
     if len(labels) > 15:
         step = max(1, len(labels)//10)
-        plt.xticks(range(0, len(labels), step), [labels[i] for i in range(0, len(labels), step)], rotation=30, ha="right")
+        indices = list(range(0, len(labels), step))
+        ax.set_xticks(indices)
+        ax.set_xticklabels([labels[i] for i in indices], rotation=30, ha="right")
     else:
-        plt.xticks(rotation=30, ha="right")
+        ax.tick_params(axis="x", rotation=30)
+        for label in ax.get_xticklabels():
+            label.set_horizontalalignment("right")
 
-    plt.tight_layout()
+    fig.tight_layout()
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=150)
-    plt.close(fig)
+    fig.savefig(buf, format="png", dpi=150)
     buf.seek(0)
 
     return StreamingResponse(buf, media_type="image/png")

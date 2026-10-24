@@ -10,6 +10,12 @@ public class IaRouterResponse {
 
     public IaRouterResponse() {}
 
+    public IaRouterResponse(String intent, Map<String, Object> entities, String lang) {
+        this.intent = intent;
+        this.entities = entities;
+        this.lang = lang;
+    }
+
     public String getIntent() { return intent; }
     public void setIntent(String intent) { this.intent = intent; }
 
