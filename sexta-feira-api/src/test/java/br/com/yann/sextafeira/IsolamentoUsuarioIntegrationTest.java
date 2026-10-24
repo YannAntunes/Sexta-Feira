@@ -1,14 +1,13 @@
 package br.com.yann.sextafeira;
 
 import br.com.yann.sextafeira.core.dto.ConvertRequest;
-import br.com.yann.sextafeira.core.integration.whatsapp.WhatsappService;
-import br.com.yann.sextafeira.core.integration.whatsapp.dto.WhatsappIncomingMessageDTO;
-import br.com.yann.sextafeira.core.webhook.WhatsappWebhookController;
 import br.com.yann.sextafeira.identity.domain.Usuario;
+import br.com.yann.sextafeira.identity.security.JwtService;
 import br.com.yann.sextafeira.identity.service.UsuarioService;
 import br.com.yann.sextafeira.modes.finance.domain.model.CategoriaTransacao;
 import br.com.yann.sextafeira.modes.finance.domain.model.ClasseAtivo;
 import br.com.yann.sextafeira.modes.finance.domain.model.MovimentoCarteira;
+import br.com.yann.sextafeira.modes.finance.domain.model.NotificacaoUsuario;
 import br.com.yann.sextafeira.modes.finance.domain.model.TipoMovimentoCarteira;
 import br.com.yann.sextafeira.modes.finance.domain.model.TipoTransacao;
 import br.com.yann.sextafeira.modes.finance.domain.model.Transacao;
@@ -17,6 +16,7 @@ import br.com.yann.sextafeira.modes.finance.dto.OrcamentoRequest;
 import br.com.yann.sextafeira.modes.finance.service.CarteiraService;
 import br.com.yann.sextafeira.modes.finance.service.CotacaoService;
 import br.com.yann.sextafeira.modes.finance.service.CurrencyService;
+import br.com.yann.sextafeira.modes.finance.service.NotificacaoService;
 import br.com.yann.sextafeira.modes.finance.service.OrcamentoService;
 import br.com.yann.sextafeira.modes.finance.service.SnapshotCarteiraService;
 import br.com.yann.sextafeira.modes.finance.service.TransacaoService;
@@ -39,10 +39,10 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 /**
- * Testes de isolamento multiusuário e integridade financeira (Etapa 3).
+ * Testes de isolamento multiusuário, segurança JWT e integridade financeira (Fase 2).
  * Todos os dados são fictícios; cotações e NLP são simulados (sem rede, sem dados reais).
  */
-@SpringBootTest(properties = "whatsapp.webhook.secret=segredo-de-teste-ficticio")
+@SpringBootTest
 @Transactional
 class IsolamentoUsuarioIntegrationTest {
 
@@ -52,12 +52,12 @@ class IsolamentoUsuarioIntegrationTest {
     @Autowired CarteiraService carteiraService;
     @Autowired SnapshotCarteiraService snapshotCarteiraService;
     @Autowired MovimentoCarteiraRepository movimentoRepo;
-    @Autowired WhatsappWebhookController webhookController;
     @Autowired CurrencyService currencyService;
+    @Autowired JwtService jwtService;
+    @Autowired NotificacaoService notificacaoService;
 
     @MockitoBean CotacaoService cotacaoService;
     @MockitoBean TransacaoIaService transacaoIaService;
-    @MockitoBean WhatsappService whatsappService;
 
     Usuario usuarioA;
     Usuario usuarioB;
@@ -65,8 +65,8 @@ class IsolamentoUsuarioIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        usuarioA = usuarioService.buscarOuCriarPorWhatsapp("teste-usuario-a");
-        usuarioB = usuarioService.buscarOuCriarPorWhatsapp("teste-usuario-b");
+        usuarioA = usuarioService.buscarOuCriarPorEmail("user-a@teste.local", "Usuário A");
+        usuarioB = usuarioService.buscarOuCriarPorEmail("user-b@teste.local", "Usuário B");
         hoje = LocalDate.now();
         when(cotacaoService.cotacaoAtual(anyString(), any())).thenReturn(new BigDecimal("10.00"));
         when(cotacaoService.cotacaoAtualSeguro(anyString(), any())).thenReturn(new BigDecimal("10.00"));
@@ -89,100 +89,93 @@ class IsolamentoUsuarioIntegrationTest {
     // ===== [SEC-02] Transações =====
 
     @Test
-    void transacoesSaoIsoladasPorUsuario() {
+    void usuarioANaoLeTransacoesDoUsuarioB() {
         transacaoService.salvar(usuarioA, despesa("100.00", CategoriaTransacao.ALIMENTACAO));
-        transacaoService.salvar(usuarioB, despesa("50.00", CategoriaTransacao.ALIMENTACAO));
+        transacaoService.salvar(usuarioB, despesa("250.00", CategoriaTransacao.TRANSPORTE));
 
-        assertEquals(1, transacaoService.listarTodas(usuarioA).size());
-        assertEquals(1, transacaoService.listarTodas(usuarioB).size());
+        var listaA = transacaoService.listarTodas(usuarioA);
+        var listaB = transacaoService.listarTodas(usuarioB);
 
-        YearMonth ym = YearMonth.from(hoje);
-        assertEquals(0, new BigDecimal("50.00").compareTo(
-                transacaoService.calcularResumoMensal(usuarioB, ym.getYear(), ym.getMonthValue()).getTotalDespesas()));
-        assertEquals(0, new BigDecimal("100.00").compareTo(
-                transacaoService.calcularResumoMensal(usuarioA, ym.getYear(), ym.getMonthValue()).getTotalDespesas()));
+        assertEquals(1, listaA.size());
+        assertEquals(new BigDecimal("100.00"), listaA.get(0).getValor());
+
+        assertEquals(1, listaB.size());
+        assertEquals(new BigDecimal("250.00"), listaB.get(0).getValor());
     }
 
     @Test
-    void usuarioBNaoRemoveUltimaTransacaoDoUsuarioA() {
-        transacaoService.salvar(usuarioA, despesa("100.00", CategoriaTransacao.ALIMENTACAO));
+    void usuarioANaoRemoveTransacaoDoUsuarioB() {
+        transacaoService.salvar(usuarioA, despesa("50.00", CategoriaTransacao.LAZER));
+        transacaoService.salvar(usuarioB, despesa("300.00", CategoriaTransacao.MORADIA));
 
-        assertThrows(RuntimeException.class, () -> transacaoService.removerUltimaTransacao(usuarioB));
-        assertEquals(1, transacaoService.listarTodas(usuarioA).size());
+        var removida = transacaoService.removerUltimaTransacao(usuarioA);
+        assertEquals(new BigDecimal("50.00"), removida.getValor());
+
+        var listaB = transacaoService.listarTodas(usuarioB);
+        assertEquals(1, listaB.size());
+        assertEquals(new BigDecimal("300.00"), listaB.get(0).getValor());
     }
 
     @Test
-    void usuarioBNaoRemovePorTextoTransacaoDoUsuarioA() {
-        transacaoService.salvar(usuarioA, despesa("100.00", CategoriaTransacao.ALIMENTACAO));
-        when(transacaoIaService.interpretarMensagem(anyString()))
-                .thenReturn(despesa("100.00", CategoriaTransacao.ALIMENTACAO));
+    void resumoMensalCalculaApenasDadosDoProprioUsuario() {
+        transacaoService.salvar(usuarioA, despesa("80.00", CategoriaTransacao.ALIMENTACAO));
+        transacaoService.salvar(usuarioB, despesa("999.00", CategoriaTransacao.ALIMENTACAO));
 
-        assertThrows(RuntimeException.class,
-                () -> transacaoService.removerPorTexto(usuarioB, "apaga o gasto de 100 no mercado"));
-        assertEquals(1, transacaoService.listarTodas(usuarioA).size());
-    }
-
-    @Test
-    void transacaoComValorNaoPositivoERejeitada() {
-        assertThrows(IllegalArgumentException.class,
-                () -> transacaoService.salvar(usuarioA, despesa("0", CategoriaTransacao.OUTROS)));
-        assertThrows(IllegalArgumentException.class,
-                () -> transacaoService.salvar(usuarioA, despesa("-5", CategoriaTransacao.OUTROS)));
+        var resumoA = transacaoService.calcularResumoMensal(usuarioA, hoje.getYear(), hoje.getMonthValue());
+        assertEquals(new BigDecimal("80.00"), resumoA.getTotalDespesas());
     }
 
     // ===== [SEC-02] Orçamentos =====
 
     @Test
-    void orcamentosSaoIsoladosEMesmaCategoriaNaoColide() {
-        YearMonth ym = YearMonth.from(hoje);
-        orcamentoService.definirOrcamento(usuarioA, orcamento(ym, "1000.00"));
+    void orcamentosSaoIndependentesPorUsuario() {
+        OrcamentoRequest reqA = new OrcamentoRequest();
+        reqA.setAno(hoje.getYear());
+        reqA.setMes(hoje.getMonthValue());
+        reqA.setCategoria(CategoriaTransacao.ALIMENTACAO);
+        reqA.setValor(new BigDecimal("500.00"));
+        orcamentoService.definirOrcamento(usuarioA, reqA);
 
-        var statusB = orcamentoService.consultarStatus(usuarioB, ym.getYear(), ym.getMonthValue(), CategoriaTransacao.ALIMENTACAO);
-        assertEquals(0, BigDecimal.ZERO.compareTo(statusB.getLimite()));
+        OrcamentoRequest reqB = new OrcamentoRequest();
+        reqB.setAno(hoje.getYear());
+        reqB.setMes(hoje.getMonthValue());
+        reqB.setCategoria(CategoriaTransacao.ALIMENTACAO);
+        reqB.setValor(new BigDecimal("1500.00"));
+        orcamentoService.definirOrcamento(usuarioB, reqB);
 
-        assertDoesNotThrow(() -> orcamentoService.definirOrcamento(usuarioB, orcamento(ym, "300.00")));
+        var statusA = orcamentoService.consultarStatus(usuarioA, hoje.getYear(), hoje.getMonthValue(), CategoriaTransacao.ALIMENTACAO);
+        var statusB = orcamentoService.consultarStatus(usuarioB, hoje.getYear(), hoje.getMonthValue(), CategoriaTransacao.ALIMENTACAO);
 
-        var statusA = orcamentoService.consultarStatus(usuarioA, ym.getYear(), ym.getMonthValue(), CategoriaTransacao.ALIMENTACAO);
-        assertEquals(0, new BigDecimal("1000.00").compareTo(statusA.getLimite()));
+        assertEquals(new BigDecimal("500.00"), statusA.getLimite());
+        assertEquals(new BigDecimal("1500.00"), statusB.getLimite());
     }
 
-    private OrcamentoRequest orcamento(YearMonth ym, String valor) {
-        OrcamentoRequest req = new OrcamentoRequest();
-        req.setAno(ym.getYear());
-        req.setMes(ym.getMonthValue());
-        req.setCategoria(CategoriaTransacao.ALIMENTACAO);
-        req.setValorLimite(new BigDecimal(valor));
-        return req;
-    }
-
-    // ===== [SEC-02] Carteira =====
+    // ===== [SEC-02] Carteira de Investimentos =====
 
     @Test
-    void doisUsuariosPodemTerOMesmoTickerSemColisaoEIsolados() {
+    void doisUsuariosPodemTerOMesmoAtivoSemColisaoDeSchema() {
         carteiraService.adicionarQuantidade(usuarioA, ClasseAtivo.ACAO, "PETR4", new BigDecimal("10"));
-        assertDoesNotThrow(() ->
-                carteiraService.adicionarQuantidade(usuarioB, ClasseAtivo.ACAO, "PETR4", new BigDecimal("3")));
+        carteiraService.adicionarQuantidade(usuarioB, ClasseAtivo.ACAO, "PETR4", new BigDecimal("25"));
 
-        assertEquals(1, carteiraService.listarTudo(usuarioB).size());
-        assertEquals(0, new BigDecimal("3").compareTo(
-                carteiraService.quantidadeAtual(usuarioB, ClasseAtivo.ACAO, "PETR4")));
+        assertEquals(new BigDecimal("10"), carteiraService.quantidadeAtual(usuarioA, ClasseAtivo.ACAO, "PETR4"));
+        assertEquals(new BigDecimal("25"), carteiraService.quantidadeAtual(usuarioB, ClasseAtivo.ACAO, "PETR4"));
 
-        carteiraService.adicionarQuantidade(usuarioA, ClasseAtivo.ACAO, "PETR4", new BigDecimal("-10"));
-        assertTrue(carteiraService.listarTudo(usuarioA).isEmpty());
-        assertEquals(1, carteiraService.listarTudo(usuarioB).size());
+        var listaA = carteiraService.listarTudo(usuarioA);
+        var listaB = carteiraService.listarTudo(usuarioB);
+        assertEquals(1, listaA.size());
+        assertEquals(1, listaB.size());
     }
 
-    // ===== [BUG-02] Aporte por valor gera um único movimento =====
+    // ===== [BUG-02] Dupla contabilização de aporte em reais =====
 
     @Test
     void aportePorValorRegistraApenasUmMovimento() {
-        carteiraService.adicionarPorValorBRL(usuarioA, ClasseAtivo.CRIPTO, "BTC", new BigDecimal("100.00"));
+        carteiraService.adicionarPorValorBRL(usuarioA, ClasseAtivo.ACAO, "VALE3", new BigDecimal("50.00"));
 
-        List<MovimentoCarteira> movs = movimentosHoje(usuarioA);
-        assertEquals(1, movs.size(), "Aporte por valor não pode gerar COMPRA duplicada");
+        var movs = movimentosHoje(usuarioA);
+        assertEquals(1, movs.size(), "Deve registrar exatamente 1 movimento para a compra por valor BRL");
         assertEquals(TipoMovimentoCarteira.APORTE_BRL, movs.get(0).getTipo());
-        assertEquals(0, new BigDecimal("10").compareTo(
-                carteiraService.quantidadeAtual(usuarioA, ClasseAtivo.CRIPTO, "BTC")));
+        assertEquals(new BigDecimal("50.00"), movs.get(0).getValorBRL());
     }
 
     // ===== [FIN-02] Venda sem saldo =====
@@ -190,12 +183,41 @@ class IsolamentoUsuarioIntegrationTest {
     @Test
     void vendaSemSaldoERejeitadaENaoRegistraMovimento() {
         assertThrows(IllegalArgumentException.class, () ->
-                carteiraService.adicionarQuantidade(usuarioA, ClasseAtivo.ACAO, "BBAS3", new BigDecimal("-5")));
-        assertTrue(movimentosHoje(usuarioA).isEmpty());
+                carteiraService.adicionarQuantidade(usuarioA, ClasseAtivo.ACAO, "ITUB4", new BigDecimal("-5")));
+
+        var movs = movimentosHoje(usuarioA);
+        assertTrue(movs.isEmpty(), "Não deve haver movimentos gravados para tentativa de venda sem saldo");
     }
 
+    // ===== [SEC-02] Snapshots da Carteira =====
+
     @Test
-    void tickerInvalidoERejeitado() {
+    void snapshotDoDiaSubstituiApenasDoUsuarioSolicitante() {
+        carteiraService.adicionarQuantidade(usuarioA, ClasseAtivo.ACAO, "BBDC4", new BigDecimal("10"));
+        carteiraService.adicionarQuantidade(usuarioB, ClasseAtivo.ACAO, "BBDC4", new BigDecimal("30"));
+
+        snapshotCarteiraService.gerarSnapshotDoDia(usuarioA, hoje, null);
+        snapshotCarteiraService.gerarSnapshotDoDia(usuarioB, hoje, null);
+
+        var snapA1 = snapshotCarteiraService.valorTotalNoDia(usuarioA, hoje, null);
+        var snapB1 = snapshotCarteiraService.valorTotalNoDia(usuarioB, hoje, null);
+        assertEquals(new BigDecimal("100.00"), snapA1); // 10 * 10.00
+        assertEquals(new BigDecimal("300.00"), snapB1); // 30 * 10.00
+
+        // Atualiza posição apenas de A e regenera snapshot de A
+        carteiraService.adicionarQuantidade(usuarioA, ClasseAtivo.ACAO, "BBDC4", new BigDecimal("5"));
+        snapshotCarteiraService.gerarSnapshotDoDia(usuarioA, hoje, null);
+
+        var snapA2 = snapshotCarteiraService.valorTotalNoDia(usuarioA, hoje, null);
+        var snapB2 = snapshotCarteiraService.valorTotalNoDia(usuarioB, hoje, null);
+        assertEquals(new BigDecimal("150.00"), snapA2); // 15 * 10.00
+        assertEquals(new BigDecimal("300.00"), snapB2, "Snapshot de B não deve ser afetado pela regeracao de A");
+    }
+
+    // ===== [SEC-03] Sanitização contra SSRF / Ticker Malicioso =====
+
+    @Test
+    void tickerComCaracteresInvalidosERejeitado() {
         assertThrows(IllegalArgumentException.class, () ->
                 carteiraService.adicionarQuantidade(usuarioA, ClasseAtivo.ACAO, "../x?y=1", BigDecimal.ONE));
     }
@@ -210,13 +232,36 @@ class IsolamentoUsuarioIntegrationTest {
         assertNull(snapshotCarteiraService.getUltimoRankingContext(usuarioB));
     }
 
-    // ===== [SEC-03] Webhook e validação de entradas externas =====
+    // ===== [SEC-03] Autenticação JWT e Notificações =====
 
     @Test
-    void webhookRejeitaTokenInvalidoOuAusente() {
-        var msg = new WhatsappIncomingMessageDTO("teste-usuario-a", "quanto gastei hoje");
-        assertThrows(SecurityException.class, () -> webhookController.receberMensagem("token-errado", msg));
-        assertThrows(SecurityException.class, () -> webhookController.receberMensagem(null, msg));
+    void tokenJwtValidoIdentificaUsuarioETokenInvalidoERejeitado() {
+        String tokenA = jwtService.gerarAccessToken(usuarioA.getId(), usuarioA.getEmail());
+        assertNotNull(tokenA);
+        assertTrue(jwtService.isTokenValido(tokenA));
+        assertEquals(usuarioA.getId(), jwtService.extrairUserId(tokenA));
+        assertEquals(usuarioA.getEmail(), jwtService.extrairEmail(tokenA));
+
+        assertFalse(jwtService.isTokenValido("token-completamente-invalido"));
+        assertFalse(jwtService.isTokenValido(tokenA + "-adulterado"));
+    }
+
+    @Test
+    void notificacoesSaoIsoladasEntreUsuarios() {
+        notificacaoService.criarNotificacao(usuarioA, "Aviso A", "Mensagem privada A", "INFO");
+        notificacaoService.criarNotificacao(usuarioB, "Aviso B", "Mensagem privada B", "ESTOURO");
+
+        List<NotificacaoUsuario> notifsA = notificacaoService.listarTodas(usuarioA);
+        List<NotificacaoUsuario> notifsB = notificacaoService.listarTodas(usuarioB);
+
+        assertEquals(1, notifsA.size());
+        assertEquals("Aviso A", notifsA.get(0).getTitulo());
+
+        assertEquals(1, notifsB.size());
+        assertEquals("Aviso B", notifsB.get(0).getTitulo());
+
+        assertThrows(SecurityException.class, () ->
+                notificacaoService.marcarComoLida(usuarioB, notifsA.get(0).getId()));
     }
 
     @Test

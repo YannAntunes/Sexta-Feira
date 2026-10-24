@@ -45,4 +45,12 @@ public class OrcamentoRequest {
     public void setValorLimite(BigDecimal valorLimite) {
         this.valorLimite = valorLimite;
     }
+
+    public BigDecimal getValor() {
+        return valorLimite;
+    }
+
+    public void setValor(BigDecimal valor) {
+        this.valorLimite = valor;
+    }
 }

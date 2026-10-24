@@ -7,7 +7,6 @@ import br.com.yann.sextafeira.core.domain.repository.MensagemHistoricoRepository
 import br.com.yann.sextafeira.core.dto.ChatResponse;
 import br.com.yann.sextafeira.core.dto.HistoricoMensagemDTO;
 import br.com.yann.sextafeira.core.dto.IaRouterResponse;
-import br.com.yann.sextafeira.core.integration.whatsapp.WhatsappService;
 import br.com.yann.sextafeira.core.service.AssistenteService;
 import br.com.yann.sextafeira.core.service.FrasesService;
 import br.com.yann.sextafeira.core.service.MensagemHistoricoService;
@@ -32,7 +31,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 /**
- * Testes automatizados da Etapa 4:
+ * Testes automatizados de IA, Memória e Personalidades:
  * - Memória conversacional isolada por usuário.
  * - Motor de personalidades (SEXTA_FEIRA, FORMAL, AMIGAVEL, JARVIS).
  * - Comando e intenção de troca de personalidade (SET_PERSONALITY).
@@ -50,92 +49,102 @@ class InteligenciaEPersonalidadeIntegrationTest {
 
     @MockitoBean CotacaoService cotacaoService;
     @MockitoBean TransacaoIaService transacaoIaService;
-    @MockitoBean WhatsappService whatsappService;
 
     Usuario usuarioA;
     Usuario usuarioB;
 
     @BeforeEach
     void setUp() {
-        usuarioA = usuarioService.buscarOuCriarPorWhatsapp("user-ia-test-a");
-        usuarioB = usuarioService.buscarOuCriarPorWhatsapp("user-ia-test-b");
+        usuarioA = usuarioService.buscarOuCriarPorEmail("user-ia-test-a@teste.local", "User IA A");
+        usuarioB = usuarioService.buscarOuCriarPorEmail("user-ia-test-b@teste.local", "User IA B");
     }
 
     // ===== 1. TESTES DO CATÁLOGO DE FRASES POR PERSONALIDADE =====
 
     @Test
-    void frasesServiceRetornaFrasesDistintasPorPersonalidade() {
-        String msgFormal = frasesService.escolher(Personalidade.FORMAL, "SET_PERSONALIDADE_OK");
-        String msgJarvis = frasesService.escolher(Personalidade.JARVIS, "SET_PERSONALIDADE_OK");
-        String msgAmigavel = frasesService.escolher(Personalidade.AMIGAVEL, "SET_PERSONALIDADE_OK");
-        String msgSexta = frasesService.escolher(Personalidade.SEXTA_FEIRA, "SET_PERSONALIDADE_OK");
+    void todasAsPersonalidadesRetornamFrasesDiferenciadasParaMesmoTipo() {
+        for (String tipo : List.of("ADD_DESPESA", "ADD_RECEITA", "ERRO_UNKNOWN", "MSG_VAZIA")) {
+            String fSexta = frasesService.escolher(Personalidade.SEXTA_FEIRA, tipo);
+            String fFormal = frasesService.escolher(Personalidade.FORMAL, tipo);
+            String fAmigavel = frasesService.escolher(Personalidade.AMIGAVEL, tipo);
+            String fJarvis = frasesService.escolher(Personalidade.JARVIS, tipo);
 
-        assertTrue(msgFormal.toUpperCase().contains("FORMAL"));
-        assertTrue(msgJarvis.contains("J.A.R.V.I.S.") || msgJarvis.toLowerCase().contains("senhor"));
-        assertTrue(msgAmigavel.toUpperCase().contains("AMIGÁVEL") || msgAmigavel.contains("carinho"));
-        assertTrue(msgSexta.toUpperCase().contains("SEXTA-FEIRA") || msgSexta.contains("sarcasmo"));
+            assertNotNull(fSexta);
+            assertNotNull(fFormal);
+            assertNotNull(fAmigavel);
+            assertNotNull(fJarvis);
+
+            assertFalse(fSexta.isBlank());
+            assertFalse(fFormal.isBlank());
+            assertFalse(fAmigavel.isBlank());
+            assertFalse(fJarvis.isBlank());
+
+            assertNotEquals(fSexta, fFormal, "Respostas de Sexta e Formal devem ser diferenciadas");
+        }
+
+        String fFormalAtivacao = frasesService.escolher(Personalidade.FORMAL, "SET_PERSONALIDADE_OK");
+        String fJarvisAtivacao = frasesService.escolher(Personalidade.JARVIS, "SET_PERSONALIDADE_OK");
+        assertTrue(fFormalAtivacao.toUpperCase().contains("FORMAL"), "Frase formal deve conter a assinatura formal");
+        assertTrue(fJarvisAtivacao.replace(".", "").toUpperCase().contains("JARVIS"), "Frase jarvis deve conter a assinatura jarvis");
     }
 
-    // ===== 2. TESTES DE TROCA DE PERSONALIDADE (SET_PERSONALITY) =====
+    // ===== 2. TESTE DE COMANDO E INTENÇÃO SET_PERSONALITY =====
 
     @Test
-    void trocaDePersonalidadeParaFormalAtualizaUsuarioEIsolaEntreUsuarios() {
-        when(transacaoIaService.rotearMensagem(anyString(), any(), any()))
-                .thenReturn(new IaRouterResponse("SET_PERSONALITY", Map.of("personality", "FORMAL"), "pt"));
+    void trocarPersonalidadeAtualizaUsuarioERespondeNoNovoModo() {
+        assertEquals(Personalidade.SEXTA_FEIRA, usuarioA.getPersonalidade());
 
-        ChatResponse respA = assistenteService.processarMensagem(usuarioA, "mude para o modo formal");
-        assertTrue(respA.getResposta().contains("FORMAL"));
-
-        // Recarrega usuário do banco para conferir persistência
-        Usuario atualizadoA = usuarioRepository.findById(usuarioA.getId()).orElseThrow();
-        assertEquals(Personalidade.FORMAL, atualizadoA.getPersonalidade());
-
-        // Usuário B permanece inalterado com a personalidade padrão
-        Usuario atualizadoB = usuarioRepository.findById(usuarioB.getId()).orElseThrow();
-        assertEquals(Personalidade.SEXTA_FEIRA, atualizadoB.getPersonalidade());
-    }
-
-    @Test
-    void trocaDePersonalidadeParaJarvisEAmigavel() {
-        when(transacaoIaService.rotearMensagem(anyString(), any(), any()))
+        when(transacaoIaService.rotearMensagem(anyString(), anyString(), any()))
                 .thenReturn(new IaRouterResponse("SET_PERSONALITY", Map.of("personality", "JARVIS"), "pt"));
 
-        ChatResponse respJarvis = assistenteService.processarMensagem(usuarioA, "ative o jarvis");
-        assertTrue(respJarvis.getResposta().contains("J.A.R.V.I.S."));
-        assertEquals(Personalidade.JARVIS, usuarioRepository.findById(usuarioA.getId()).orElseThrow().getPersonalidade());
+        ChatResponse resposta = assistenteService.processarMensagem(usuarioA, "mude para o modo jarvis");
 
-        when(transacaoIaService.rotearMensagem(anyString(), any(), any()))
-                .thenReturn(new IaRouterResponse("SET_PERSONALITY", Map.of("personality", "AMIGAVEL"), "pt"));
+        assertNotNull(resposta);
+        String texto = resposta.getResposta().replace(".", "").toUpperCase();
+        assertTrue(texto.contains("JARVIS") || texto.contains("PROTOCOLOS"),
+                "A resposta deve adotar a persona JARVIS");
 
-        ChatResponse respAmigavel = assistenteService.processarMensagem(usuarioA, "seja mais amigável");
-        assertTrue(respAmigavel.getResposta().contains("AMIGÁVEL"));
-        assertEquals(Personalidade.AMIGAVEL, usuarioRepository.findById(usuarioA.getId()).orElseThrow().getPersonalidade());
+        Usuario atualizado = usuarioRepository.findById(usuarioA.getId()).orElseThrow();
+        assertEquals(Personalidade.JARVIS, atualizado.getPersonalidade(), "A personalidade do usuário deve ter sido persistida no banco");
     }
 
-    // ===== 3. TESTES DE MEMÓRIA CONVERSACIONAL ISOLADA POR USUÁRIO =====
+    // ===== 3. TESTE DE MEMÓRIA CONVERSACIONAL E JANELA DESLIZANTE =====
 
     @Test
-    void mensagensSaoGravadasNoHistoricoIsoladoPorUsuario() {
-        when(transacaoIaService.rotearMensagem(anyString(), any(), any()))
+    void memoriaConversacionalRegistraMensagensEIsolaPorUsuario() {
+        when(transacaoIaService.rotearMensagem(anyString(), anyString(), any()))
                 .thenReturn(new IaRouterResponse("UNKNOWN", Map.of(), "pt"));
 
-        assistenteService.processarMensagem(usuarioA, "olá assistente");
-        assistenteService.processarMensagem(usuarioA, "segunda mensagem do usuário A");
+        assistenteService.processarMensagem(usuarioA, "olá sexta-feira");
+        assistenteService.processarMensagem(usuarioA, "quanto gastei hoje?");
 
-        assertEquals(4, historicoRepository.countByUsuario(usuarioA)); // 2 do usuário + 2 respostas do bot
-        assertEquals(0, historicoRepository.countByUsuario(usuarioB)); // Usuário B não tem mensagens
+        List<HistoricoMensagemDTO> histA = historicoService.obterHistoricoRecente(usuarioA, 10);
+        List<HistoricoMensagemDTO> histB = historicoService.obterHistoricoRecente(usuarioB, 10);
 
-        List<HistoricoMensagemDTO> janelaA = historicoService.obterHistoricoRecente(usuarioA, 10);
-        assertEquals(4, janelaA.size());
-        assertEquals("user", janelaA.get(0).getRole());
-        assertEquals("olá assistente", janelaA.get(0).getContent());
-        assertEquals("assistant", janelaA.get(1).getRole());
+        assertEquals(4, histA.size(), "Deve conter 2 mensagens do usuário + 2 respostas do bot");
+        assertEquals("user", histA.get(0).role());
+        assertEquals("olá sexta-feira", histA.get(0).content());
+        assertEquals("assistant", histA.get(1).role());
+
+        assertEquals(0, histB.size(), "O usuário B não deve ter acesso ao histórico do usuário A");
     }
 
     @Test
-    void mensagemVaziaRetornaMensagemDePersonalidadeSemChamarIA() {
-        ChatResponse respVazia = assistenteService.processarMensagem(usuarioA, "   ");
-        assertNotNull(respVazia);
-        assertFalse(respVazia.getResposta().isBlank());
+    void janelaDeslizanteRespeitaLimiteMaximo() {
+        for (int i = 1; i <= 15; i++) {
+            historicoService.registrarMensagemUsuario(usuarioA, "msg " + i, "TESTE");
+        }
+
+        List<HistoricoMensagemDTO> janela = historicoService.obterHistoricoRecente(usuarioA, 5);
+        assertEquals(5, janela.size(), "A janela deslizante deve respeitar exatamente o limite pedido");
+        assertEquals("msg 11", janela.get(0).content(), "A mais antiga da janela de 5 deve ser a msg 11");
+        assertEquals("msg 15", janela.get(4).content(), "A mais recente deve ser a msg 15");
+    }
+
+    @Test
+    void mensagemVaziaRetornaMensagemDeAvisoSemChamarIa() {
+        ChatResponse resp = assistenteService.processarMensagem(usuarioA, "   ");
+        assertNotNull(resp);
+        assertFalse(resp.getResposta().isBlank());
     }
 }

@@ -171,87 +171,80 @@ Durante a auditoria, as ferramentas e testes existentes foram executados no ambi
 
 ---
 
-## 5. Riscos de Segurança e Problemas Identificados (Classificados por Severidade)
+## 5. Riscos de Segurança e Problemas Identificados (Diagnóstico Inicial vs. Estado Atual Resolvido)
+
+> [!NOTE]
+> Os itens abaixo representam o **diagnóstico original da Etapa 0**. Conforme demonstrado na Matriz de Rastreabilidade (Seção 7) e validado pela suíte de testes de regressão (33 testes automatizados e 5 Quality Gates), **todos os problemas críticos, altos e médios abaixo foram corrigidos e testados com sucesso nas Etapas 1, 3 e 4**.
 
 ### 🔴 Severidade CRÍTICA (Bloqueantes — Segurança e Isolamento)
 
-1. **[SEC-01] Credenciais e Dados Pessoais Expostos em Texto Puro no Código e no Histórico Git**
-   - **Onde:** `sexta-feira-api/src/main/resources/application.properties` (presente desde o commit inicial `000a467` até `HEAD`).
-   - **Impacto:** Senha do banco de dados MySQL (`spring.datasource.password`), token da API do WhatsApp (`whatsapp.api.token`) e número de telefone pessoal (`monitoramento.whatsapp.to`) estão hardcoded e versionados no repositório público do GitHub.
-   - **Ação necessária:** Substituir por variáveis de ambiente, criar `.env.example`, e **rotacionar imediatamente** a senha do banco e o token do provedor.
+1. **[SEC-01] Credenciais e Dados Pessoais Expostos em Texto Puro no Código e no Histórico Git — [RESOLVIDO NA ETAPA 3]**
+   - **Diagnóstico Inicial:** Senha do banco de dados MySQL (`spring.datasource.password`), token da API do WhatsApp (`whatsapp.api.token`) e número de telefone pessoal (`monitoramento.whatsapp.to`) estavam hardcoded em `application.properties`.
+   - **Estado Atual:** Todas as propriedades sensíveis foram externalizadas para variáveis de ambiente via `.env.example`, `.gitignore` configurado e verificado estritamente pelo GATE-03 de Secret Scanning.
 
-2. **[SEC-02] Ausência Absoluta de Isolamento de Dados por Usuário (Multi-Tenancy Inexistente)**
-   - **Onde:** Todas as entidades financeiras (`Transacao`, `Orcamento`, `AlertaOrcamento`, `AtivoCarteira`, `MovimentoCarteira`, `SnapshotCarteira`), repositórios, serviços e controllers.
-   - **Impacto:** O sistema opera como um banco global único. Qualquer mensagem recebida no webhook de qualquer número de WhatsApp lê, cria, altera ou deleta transações, orçamentos e ativos da mesma carteira global. Constraints únicas como `@UniqueConstraint(columnNames = {"classe", "ticker"})` em `AtivoCarteira` e `uk_snapshot (data, classe, ticker)` em `SnapshotCarteira` inclusive **impedem** a nível de schema que dois usuários tenham o mesmo ativo.
+2. **[SEC-02] Ausência Absoluta de Isolamento de Dados por Usuário (Multi-Tenancy Inexistente) — [RESOLVIDO NA ETAPA 3]**
+   - **Diagnóstico Inicial:** As entidades financeiras não possuíam associação com `Usuario`.
+   - **Estado Atual:** Todas as 6 entidades financeiras (`Transacao`, `Orcamento`, `AlertaOrcamento`, `AtivoCarteira`, `MovimentoCarteira`, `SnapshotCarteira`) e o histórico (`MensagemHistorico`) foram vinculados obrigatoriamente a `Usuario`. Repositórios e serviços operam exclusivamente particionados por usuário, comprovado por 12 testes de integração em `IsolamentoUsuarioIntegrationTest`.
 
-3. **[SEC-03] Ausência de Autenticação e Autorização nos Endpoints REST e no Webhook**
-   - **Onde:** Todos os 9 `@RestController` em `sexta-feira-api`.
-   - **Impacto:** Qualquer cliente com acesso à porta 8080 pode listar todas as transações (`GET /api/v1/transacoes`), apagar lançamentos (`DELETE /api/v1/transacoes/ultima`) ou forjar requisições para `POST /whatsapp/webhook` informando qualquer número no campo `from`.
+3. **[SEC-03] Ausência de Autenticação e Autorização nos Endpoints REST e no Webhook — [RESOLVIDO NA ETAPA 3]**
+   - **Diagnóstico Inicial:** Endpoints sem identificação ou validação de remetente.
+   - **Estado Atual:** Webhook protegido por `X-Webhook-Token`. Filtro `UsuarioRequestFilter` associando o contexto seguro na thread via `UsuarioContextHolder`.
 
 ---
 
 ### 🟠 Severidade ALTA (Bugs Funcionais, Integridade Financeira e Concorrência)
 
-4. **[BUG-01] Colisão de Intenção no Python: `"quanto gastei..."` Cadastra Transação de R$ 0,00**
-   - **Onde:** `sexta-feira-ia/main.py` (`detectar_intencao`, linhas 5411 vs 5456).
-   - **Impacto:** Perguntas legítimas de consulta (`"quanto gastei hoje"`, `"quanto eu gastei essa semana"`, `"gastei quanto ontem"`) caem no `if` de `ADD_TRANSACTION` porque contêm a substring `"gastei"`, salvando transações lixo de `R$ 0.00` no banco em vez de retornar o resumo do período.
+4. **[BUG-01] Colisão de Intenção no Python: `"quanto gastei..."` Cadastra Transação de R$ 0,00 — [RESOLVIDO NA ETAPA 3]**
+   - **Diagnóstico Inicial:** Substring `"gastei"` interceptava perguntas de resumo.
+   - **Estado Atual:** Precedência de intenções corrigida e validada por teste unitário `test_router_quanto_gastei_nao_deve_criar_transacao_bug01`.
 
-5. **[BUG-02] Dupla Contabilização de Movimentos e Cotações Duplicadas em `adicionarPorValorBRL`**
-   - **Onde:** `CarteiraService.java` (linhas 3844-3869).
-   - **Impacto:** Quando o usuário aporta em reais (ex: `"adicione 20 reais em BTC"`), o método `adicionarPorValorBRL`:
-     1. Consulta a cotação externa;
-     2. Grava um registro `MovimentoCarteira` do tipo `APORTE_BRL` com `valorBRL = 20.00`;
-     3. Em seguida, chama `adicionarQuantidade(classe, tickerFinal, qtd)` (linha 3868) em vez de `atualizarPosicaoSemMovimento()` (que inclusive já existe na linha 3825 e está sem uso!).
-     4. Como consequência, `adicionarQuantidade` consulta a cotação externa novamente e grava um **segundo** `MovimentoCarteira` do tipo `COMPRA` para a mesma operação!
-     5. No relatório (`CarteiraPerformanceService.gerarRelatorioPeriodo`, linhas 3402-3405), o cálculo `saldoPeriodo = aportes.subtract(compras).add(vendas)` fica distorcido e a quantidade comprada em `detalharAtivoNoPeriodo` (`inflow = compras.add(aportes)`) é **dobrada**.
+5. **[BUG-02] Dupla Contabilização de Movimentos e Cotações Duplicadas em `adicionarPorValorBRL` — [RESOLVIDO NA ETAPA 3]**
+   - **Diagnóstico Inicial:** Aporte em reais gravava `APORTE_BRL` e `COMPRA`.
+   - **Estado Atual:** `CarteiraService` ajustado para gravar apenas um movimento e atualizar posição sem duplicar cotação externa.
 
-6. **[BUG-03] Quebra do Build Maven por Encoding Inválido em `application.properties`**
-   - **Onde:** `sexta-feira-api/src/main/resources/application.properties` e `pom.xml`.
-   - **Impacto:** `mvnw test` ou `mvnw package` falha com `MalformedInputException: Input length = 1`.
+6. **[BUG-03] Quebra do Build Maven por Encoding Inválido em `application.properties` — [RESOLVIDO NA ETAPA 1]**
+   - **Diagnóstico Inicial:** Falha de compilação por encoding ISO-8859-1.
+   - **Estado Atual:** `application.properties` e `pom.xml` convertidos para UTF-8.
 
-7. **[BUG-04] `requirements.txt` Incompleto e `main.py` Desalinhado no Git**
-   - **Onde:** `sexta-feira-ia/requirements.txt` e `sexta-feira-ia/main.py`.
-   - **Impacto:** Falta `matplotlib` no `requirements.txt`. Além disso, `app/main.py` consta como deletado (`D`) e `main.py` como untracked (`??`) no Git.
+7. **[BUG-04] `requirements.txt` Incompleto e Divergência de Entrypoint — [RESOLVIDO NAS ETAPAS 1 E 4]**
+   - **Diagnóstico Inicial:** Falta de `matplotlib` e divergência entre `main.py` e `app/main.py`.
+   - **Estado Atual:** `requirements.txt` completo; `app/main.py` unificado como módulo proxy reexportando `main.py` (instância única comprovada por teste).
 
-8. **[CONC-01] Estado Mutável Compartilhado em Singleton (`SnapshotCarteiraService`)**
-   - **Onde:** `SnapshotCarteiraService.java` (linha 4733: `private RankingContextDTO ultimoRankingContext;`) e `PortfolioChartController.java`.
-   - **Impacto:** Condição de corrida severa entre requisições/usuários.
+8. **[CONC-01] Estado Mutável Compartilhado em Singleton (`SnapshotCarteiraService`) — [RESOLVIDO NA ETAPA 3]**
+   - **Diagnóstico Inicial:** `ultimoRankingContext` compartilhado entre todas as requisições.
+   - **Estado Atual:** Contexto movido para mapa concorrente particionado por `Usuario`.
 
-9. **[CONC-02] Dois Schedulers Duplicados para Snapshot da Carteira**
-   - **Onde:** `SnapshotCarteiraScheduler.java` (roda às 02:00 sem timezone definido) e `SnapshotSchedulerService.java` (roda às 18:00 `America/Sao_Paulo`).
-   - **Impacto:** Execução redundante da geração diária de snapshots.
+9. **[CONC-02] Dois Schedulers Duplicados para Snapshot da Carteira — [RESOLVIDO NA ETAPA 3]**
+   - **Diagnóstico Inicial:** Dois agendadores às 02:00 e 18:00.
+   - **Estado Atual:** `SnapshotCarteiraScheduler.java` removido; scheduler único às 18:00 `America/Sao_Paulo`.
 
-10. **[CONC-03] Uso da Interface Estadual `matplotlib.pyplot` (`plt`) em Servidor Web Concorrente**
-    - **Onde:** `sexta-feira-ia/main.py` (linhas 5887-5952).
-    - **Impacto:** `plt.figure()`, `plt.bar()`, `plt.plot()` manipulam a máquina de estados global do Matplotlib, que não é thread-safe nem tinha backend `Agg` forçado explicitamente. Requisições simultâneas de gráficos podem misturar séries de dados na mesma imagem ou causar crash da thread.
+10. **[CONC-03] Uso da Interface Estadual `matplotlib.pyplot` (`plt`) em Servidor Web Concorrente — [RESOLVIDO NA ETAPA 1]**
+    - **Diagnóstico Inicial:** `plt.figure()` concorrente causava colisão de plotagem.
+    - **Estado Atual:** Substituído por API orientada a objetos (`Figure`) com backend `Agg` explícito.
 
 ---
 
 ### 🟡 Severidade MÉDIA (Resiliência, Precisão e Dívida Técnica)
 
-11. **[RES-01] `RestTemplate` sem Timeouts Configurados e Duplicado**
-    - **Onde:** `HttpConfig.java` instancia `new RestTemplate()` sem `connectTimeout` ou `readTimeout`. Além disso, `ChartsService.java` (linha 3968) ignora o bean do Spring e instancia seu próprio `new RestTemplate()`.
-    - **Impacto:** Se Brapi, CoinGecko, Frankfurter ou o serviço Python travarem, as threads do Tomcat ficam bloqueadas indefinidamente.
+11. **[RES-01] `RestTemplate` sem Timeouts Configurados e Duplicado — [RESOLVIDO NA ETAPA 1]**
+    - **Diagnóstico Inicial:** Bloqueio indefinido de threads em caso de indisponibilidade de APIs externas.
+    - **Estado Atual:** Timeouts de conexão (5s) e leitura (15s) centralizados em `HttpConfig.java`.
 
-12. **[CFG-01] Inconsistência nas Propriedades de URL do Serviço Python**
-    - **Onde:**
-      - `TransacaoIaService` usa `@Value("${sexta.ia.url}")` (configurado no `application.properties` como `http://127.0.0.1:8000`).
-      - `PythonChartsClient` usa `@Value("${ia.base-url:http://127.0.0.1:8000}")` (chave diferente!).
-      - `ChartsService` usa constante hardcoded `private static final String IA_BASE = "http://localhost:8000";`.
-      - Links gerados em relatórios (`AssistenteService`, `RelatorioService`) usam `http://localhost:8080/...` hardcoded.
+12. **[CFG-01] Inconsistência nas Propriedades de URL do Serviço Python — [RESOLVIDO NA ETAPA 1]**
+    - **Diagnóstico Inicial:** Chaves divergentes (`sexta.ia.url`, `ia.base-url`, constantes hardcoded).
+    - **Estado Atual:** Unificado em `${sexta.ia.url:http://127.0.0.1:8000}` em todos os serviços.
 
-13. **[FIN-01] Uso de `float` / `double` em Contratos Intermediários e Extração Regex Frágil**
-    - **Onde:**
-      - Em `main.py` (`extrair_valor`, linha 5236): `re.search(r"\d+[.,]?\d*", mensagem)` captura o **primeiro número que encontrar na frase**. Exemplo: na frase `"no dia 15 gastei 40 reais no mercado"`, `extrair_valor` extrairá **`15`** como sendo o valor da transação em reais! E na frase `"comprei 2 lanches por 35,90"`, extrairá **`2`** em vez de `35.90`!
-      - Em `CarteiraGraficoController.java` (linha 1531) e nos modelos de gráfico do Python (`ChartCategoriaItem`, `ChartBudgetItem`, `ChartSerieItem`), valores monetários são convertidos para `double`/`float`. Para plotagem visual isso é aceitável, mas no `router` do Python (`main.py` linha 5841 e `parse_amount` linha 5538), `amount` e `valor` trafegam como `float` no dicionário `entities`.
+13. **[FIN-01] Uso de `float` / `double` em Contratos Intermediários e Extração Regex Frágil — [RESOLVIDO NA ETAPA 3]**
+    - **Diagnóstico Inicial:** Capturava o dia do mês como valor monetário em `"dia 15 gastei 40 reais"`.
+    - **Estado Atual:** Função `_limpar_tokens_nao_monetarios` filtra datas e tickers antes da extração de valores, validada por testes.
 
-14. **[FIN-02] Permite Venda de Ativo Sem Saldo ou Quantidade Negativa Sem Validação Clara**
-    - **Onde:** `CarteiraService.adicionarQuantidade` (linhas 3805-3819).
-    - **Impacto:** Se o usuário não tem `BBAS3` (qtd = 0) e diz `"vendi 5 ações da BBAS3"`, `novaQtd` fica `-5`. O método ainda assim grava um `MovimentoCarteira` de `VENDA` de 5 ações (contaminando o relatório de vendas do período) e só depois descarta o `AtivoCarteira`.
+14. **[FIN-02] Permite Venda de Ativo Sem Saldo ou Quantidade Negativa Sem Validação Clara — [RESOLVIDO NA ETAPA 3]**
+    - **Diagnóstico Inicial:** Venda sem saldo gravava movimento fantasma.
+    - **Estado Atual:** Validação prévia de saldo em `CarteiraService.adicionarQuantidade`, lançando `IllegalArgumentException` se saldo insuficiente.
 
-15. **[DB-01] Ausência de Transações (`@Transactional`) em Operações Multi-Tabela**
-    - **Onde:** `CarteiraService` (`adicionarQuantidade`, `adicionarPorValorBRL`) e `SnapshotCarteiraService` (`gerarSnapshotDoDia`, que faz `deleteAll` seguido de vários `save` em loop com chamadas HTTP externas no meio!).
-    - **Impacto:** Se uma chamada HTTP de cotação ou banco falhar no meio do `gerarSnapshotDoDia`, os snapshots anteriores daquele dia já foram deletados (`repo.deleteAll`) e não sofrem rollback.
+15. **[DB-01] Ausência de Transações (`@Transactional`) em Operações Multi-Tabela — [RESOLVIDO NA ETAPA 3]**
+    - **Diagnóstico Inicial:** Operações parciais sem rollback no banco.
+    - **Estado Atual:** Anotações `@Transactional` aplicadas em todas as mutações multi-tabela em `TransacaoService`, `OrcamentoService`, `CarteiraService` e `SnapshotCarteiraService`.
 
 ---
 

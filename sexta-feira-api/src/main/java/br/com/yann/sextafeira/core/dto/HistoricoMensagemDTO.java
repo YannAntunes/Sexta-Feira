@@ -16,11 +16,19 @@ public class HistoricoMensagemDTO {
         return role;
     }
 
+    public String role() {
+        return role;
+    }
+
     public void setRole(String role) {
         this.role = role;
     }
 
     public String getContent() {
+        return content;
+    }
+
+    public String content() {
         return content;
     }
 

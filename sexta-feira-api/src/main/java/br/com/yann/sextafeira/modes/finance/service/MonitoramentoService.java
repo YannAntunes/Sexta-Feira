@@ -1,7 +1,5 @@
 package br.com.yann.sextafeira.modes.finance.service;
 
-import br.com.yann.sextafeira.core.integration.whatsapp.WhatsappService;
-import br.com.yann.sextafeira.core.integration.whatsapp.dto.WhatsappOutgoingMessageDTO;
 import br.com.yann.sextafeira.identity.domain.Usuario;
 import br.com.yann.sextafeira.identity.repository.UsuarioRepository;
 import br.com.yann.sextafeira.identity.service.UsuarioService;
@@ -10,7 +8,6 @@ import br.com.yann.sextafeira.modes.finance.domain.model.CategoriaTransacao;
 import br.com.yann.sextafeira.modes.finance.domain.repository.AlertaOrcamentoRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,21 +25,18 @@ public class MonitoramentoService {
 
     private final OrcamentoService orcamentoService;
     private final AlertaOrcamentoRepository alertaRepo;
-    private final WhatsappService whatsappService;
+    private final NotificacaoService notificacaoService;
     private final UsuarioRepository usuarioRepository;
     private final UsuarioService usuarioService;
 
-    @Value("${monitoramento.whatsapp.to:}")
-    private String whatsappToFallback;
-
     public MonitoramentoService(OrcamentoService orcamentoService,
                                 AlertaOrcamentoRepository alertaRepo,
-                                WhatsappService whatsappService,
+                                NotificacaoService notificacaoService,
                                 UsuarioRepository usuarioRepository,
                                 UsuarioService usuarioService) {
         this.orcamentoService = orcamentoService;
         this.alertaRepo = alertaRepo;
-        this.whatsappService = whatsappService;
+        this.notificacaoService = notificacaoService;
         this.usuarioRepository = usuarioRepository;
         this.usuarioService = usuarioService;
     }
@@ -78,6 +72,7 @@ public class MonitoramentoService {
             if (gasto.compareTo(limite) > 0) {
                 BigDecimal excedeu = gasto.subtract(limite);
                 enviarUmaVezPorMes(usuario, ano, mes, cat, "ESTOURO",
+                        "Orçamento Estourado: " + cat.name(),
                         String.format(
                                 "🚨 %s estourou o orçamento.\nLimite: R$ %.2f\nGasto: R$ %.2f\nExcedeu: R$ %.2f",
                                 cat.name(), limite, gasto, excedeu
@@ -91,6 +86,7 @@ public class MonitoramentoService {
 
             if (perc.compareTo(BigDecimal.valueOf(90)) >= 0) {
                 enviarUmaVezPorMes(usuario, ano, mes, cat, "PERCENT_90",
+                        "Alerta 90%: " + cat.name(),
                         String.format(
                                 "🔥 %s passou de 90%% do orçamento.\nLimite: R$ %.2f\nGasto: R$ %.2f\nSobra: R$ %.2f",
                                 cat.name(), limite, gasto, limite.subtract(gasto)
@@ -98,6 +94,7 @@ public class MonitoramentoService {
                 );
             } else if (perc.compareTo(BigDecimal.valueOf(80)) >= 0) {
                 enviarUmaVezPorMes(usuario, ano, mes, cat, "PERCENT_80",
+                        "Alerta 80%: " + cat.name(),
                         String.format(
                                 "⚠️ %s passou de 80%% do orçamento.\nLimite: R$ %.2f\nGasto: R$ %.2f\nSobra: R$ %.2f",
                                 cat.name(), limite, gasto, limite.subtract(gasto)
@@ -107,20 +104,13 @@ public class MonitoramentoService {
         }
     }
 
-    private void enviarUmaVezPorMes(Usuario usuario, int ano, int mes, CategoriaTransacao cat, String tipo, String texto) {
+    private void enviarUmaVezPorMes(Usuario usuario, int ano, int mes, CategoriaTransacao cat, String tipo, String titulo, String texto) {
         var existente = alertaRepo.findByUsuarioAndAnoAndMesAndCategoriaAndTipoAlerta(usuario, ano, mes, cat, tipo);
         if (existente.isPresent()) return;
 
         alertaRepo.save(new AlertaOrcamento(usuario, ano, mes, cat, tipo, LocalDateTime.now()));
 
-        String destino = (usuario.getWhatsappNumber() != null && !usuario.getWhatsappNumber().isBlank())
-                ? usuario.getWhatsappNumber()
-                : whatsappToFallback;
-
-        if (destino != null && !destino.isBlank()) {
-            whatsappService.enviarMensagem(new WhatsappOutgoingMessageDTO(destino, texto));
-        } else {
-            log.info("[ALERTA usuarioId={}] {}", usuario.getId(), texto);
-        }
+        notificacaoService.criarNotificacao(usuario, titulo, texto, tipo);
+        log.info("[NOTIFICACAO usuarioId={}] {}: {}", usuario.getId(), titulo, texto);
     }
 }

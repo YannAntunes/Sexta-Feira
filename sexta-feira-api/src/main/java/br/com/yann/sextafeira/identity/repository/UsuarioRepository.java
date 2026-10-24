@@ -9,5 +9,10 @@ import java.util.Optional;
 @Repository
 public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
 
+    Optional<Usuario> findByEmail(String email);
+
+    boolean existsByEmail(String email);
+
+    @Deprecated
     Optional<Usuario> findByWhatsappNumber(String whatsappNumber);
 }
