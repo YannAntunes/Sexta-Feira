@@ -1,10 +1,12 @@
 package br.com.yann.sextafeira.modes.finance.service;
 
+import br.com.yann.sextafeira.identity.service.UsuarioService;
 import br.com.yann.sextafeira.modes.finance.domain.model.CategoriaTransacao;
 import br.com.yann.sextafeira.modes.finance.domain.model.TipoTransacao;
 import br.com.yann.sextafeira.modes.finance.domain.model.Transacao;
 import br.com.yann.sextafeira.modes.finance.dto.ChartBudgetItemDTO;
 import br.com.yann.sextafeira.modes.finance.domain.repository.TransacaoRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -19,13 +21,18 @@ public class ChartsService {
 
     private final TransacaoRepository transacaoRepository;
     private final OrcamentoService orcamentoService;
+    private final RestTemplate restTemplate;
+    private final UsuarioService usuarioService;
 
-    private final RestTemplate restTemplate = new RestTemplate();
-    private static final String IA_BASE = "http://localhost:8000";
+    @Value("${sexta.ia.url:http://127.0.0.1:8000}")
+    private String iaBaseUrl;
 
-    public ChartsService(TransacaoRepository repo, OrcamentoService orcamentoService) {
+    public ChartsService(TransacaoRepository repo, OrcamentoService orcamentoService, RestTemplate restTemplate,
+                         UsuarioService usuarioService) {
+        this.usuarioService = usuarioService;
         this.transacaoRepository = repo;
         this.orcamentoService = orcamentoService;
+        this.restTemplate = restTemplate;
     }
 
     public Map<String, BigDecimal> gastosPorCategoriaDoMesAtual() {
@@ -33,7 +40,7 @@ public class ChartsService {
         LocalDate inicio = ym.atDay(1);
         LocalDate fim = ym.atEndOfMonth();
 
-        List<Transacao> transacoes = transacaoRepository.findByDataBetween(inicio, fim);
+        List<Transacao> transacoes = transacaoRepository.findByUsuarioAndDataBetween(usuarioService.obterUsuarioAtual(), inicio, fim);
 
         Map<String, BigDecimal> soma = new HashMap<>();
 
@@ -79,7 +86,7 @@ public class ChartsService {
         LocalDate inicio = ym.atDay(1);
         LocalDate fim = ym.atEndOfMonth();
 
-        List<Transacao> transacoes = transacaoRepository.findByDataBetween(inicio, fim);
+        List<Transacao> transacoes = transacaoRepository.findByUsuarioAndDataBetween(usuarioService.obterUsuarioAtual(), inicio, fim);
 
         Map<LocalDate, BigDecimal> serie = new LinkedHashMap<>();
         for (int d = 1; d <= ym.lengthOfMonth(); d++) {
@@ -104,7 +111,7 @@ public class ChartsService {
     }
 
     public Map<String, BigDecimal> gastosPorCategoria(LocalDate inicio, LocalDate fim) {
-        List<Transacao> transacoes = transacaoRepository.findByDataBetween(inicio, fim);
+        List<Transacao> transacoes = transacaoRepository.findByUsuarioAndDataBetween(usuarioService.obterUsuarioAtual(), inicio, fim);
 
         Map<String, BigDecimal> soma = new HashMap<>();
 
@@ -126,13 +133,19 @@ public class ChartsService {
 
         HttpEntity<Map<String, Object>> req = new HttpEntity<>(payload, headers);
 
-        ResponseEntity<byte[]> resp = restTemplate.exchange(
-                IA_BASE + "/ia/charts/serie-linha",
-                HttpMethod.POST,
-                req,
-                byte[].class
-        );
-
-        return resp.getBody();
+        try {
+            ResponseEntity<byte[]> resp = restTemplate.exchange(
+                    iaBaseUrl + "/ia/charts/serie-linha",
+                    HttpMethod.POST,
+                    req,
+                    byte[].class
+            );
+            if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
+                throw new IllegalStateException("Falha ao gerar gráfico de série no serviço Python.");
+            }
+            return resp.getBody();
+        } catch (org.springframework.web.client.RestClientException ex) {
+            throw new IllegalStateException("Serviço Python de gráficos indisponível.");
+        }
     }
 }

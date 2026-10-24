@@ -1,5 +1,7 @@
 package br.com.yann.sextafeira.modes.finance.domain.model;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -11,6 +13,11 @@ public class Transacao {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "usuario_id")
+    private Usuario usuario;
 
     @Column(nullable = false)
     private LocalDate data;
@@ -29,11 +36,8 @@ public class Transacao {
     @Column(length = 255)
     private String descricao;
 
-    // Construtor vazio obrigatório pro JPA
     public Transacao() {
     }
-
-    // Getters e setters
 
     public Long getId() {
         return id;
@@ -41,6 +45,14 @@ public class Transacao {
 
     public void setId(Long id) {
         this.id = id;
+    }
+
+    public Usuario getUsuario() {
+        return usuario;
+    }
+
+    public void setUsuario(Usuario usuario) {
+        this.usuario = usuario;
     }
 
     public LocalDate getData() {

@@ -1,5 +1,7 @@
 package br.com.yann.sextafeira.modes.finance.domain.model;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -8,13 +10,18 @@ import java.time.LocalDateTime;
 @Entity
 @Table(
         name = "snapshots_carteira",
-        uniqueConstraints = @UniqueConstraint(name = "uk_snapshot", columnNames = {"data", "classe", "ticker"})
+        uniqueConstraints = @UniqueConstraint(name = "uk_snapshot_usuario", columnNames = {"usuario_id", "data", "classe", "ticker"})
 )
 public class SnapshotCarteira {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "usuario_id")
+    private Usuario usuario;
 
     private LocalDate data;
 
@@ -41,6 +48,12 @@ public class SnapshotCarteira {
 
     public SnapshotCarteira(LocalDate data, ClasseAtivo classe, String ticker,
                             BigDecimal quantidade, BigDecimal precoUnitBRL, BigDecimal valorBRL) {
+        this(null, data, classe, ticker, quantidade, precoUnitBRL, valorBRL);
+    }
+
+    public SnapshotCarteira(Usuario usuario, LocalDate data, ClasseAtivo classe, String ticker,
+                            BigDecimal quantidade, BigDecimal precoUnitBRL, BigDecimal valorBRL) {
+        this.usuario = usuario;
         this.data = data;
         this.classe = classe;
         this.ticker = ticker;
@@ -50,6 +63,8 @@ public class SnapshotCarteira {
     }
 
     public Long getId() { return id; }
+    public Usuario getUsuario() { return usuario; }
+    public void setUsuario(Usuario usuario) { this.usuario = usuario; }
     public LocalDate getData() { return data; }
     public ClasseAtivo getClasse() { return classe; }
     public String getTicker() { return ticker; }

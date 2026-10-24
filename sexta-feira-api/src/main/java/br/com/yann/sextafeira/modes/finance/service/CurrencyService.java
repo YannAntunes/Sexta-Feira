@@ -12,6 +12,9 @@ import java.util.Map;
 @Service
 public class CurrencyService {
 
+    // [SEC-03] Código ISO 4217 validado antes de compor URL externa
+    private static final java.util.regex.Pattern MOEDA = java.util.regex.Pattern.compile("^[A-Z]{3}$");
+
     private final RestTemplate restTemplate;
 
     public CurrencyService(RestTemplate restTemplate) {
@@ -29,6 +32,9 @@ public class CurrencyService {
 
         String from = req.getFrom().trim().toUpperCase();
         String to = req.getTo().trim().toUpperCase();
+        if (!MOEDA.matcher(from).matches() || !MOEDA.matcher(to).matches()) {
+            throw new IllegalArgumentException("Código de moeda inválido: use 3 letras (ex.: USD, BRL).");
+        }
 
         // usa amount=1 pra pegar a taxa unitária
         String urlRate = "https://api.frankfurter.dev/v1/latest?amount=1&from=" + from + "&to=" + to;

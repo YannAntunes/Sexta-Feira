@@ -13,6 +13,9 @@ import java.util.Map;
 @Service
 public class CotacaoService {
 
+    // [SEC-03] Ticker validado antes de compor URL externa (evita path/query injection)
+    private static final java.util.regex.Pattern TICKER = java.util.regex.Pattern.compile("^[A-Z0-9]{2,15}$");
+
     private final RestTemplate restTemplate;
 
     @Value("${brapi.base-url:https://brapi.dev/api}")
@@ -46,9 +49,17 @@ public class CotacaoService {
         }
     }
 
+    static String normalizarTicker(String ticker) {
+        String t = ticker == null ? "" : ticker.trim().toUpperCase();
+        if (!TICKER.matcher(t).matches()) {
+            throw new IllegalArgumentException("Ticker inválido: use 2 a 15 letras/números (ex.: PETR4, BTC).");
+        }
+        return t;
+    }
+
     // ===== BRAPI (Ações/FIIs) =====
     private BigDecimal cotacaoBrapi(String ticker) {
-        String t = ticker.toUpperCase().trim();
+        String t = normalizarTicker(ticker);
         String url = brapiBaseUrl + "/quote/" + t;
 
         if (brapiToken != null && !brapiToken.isBlank()) {
@@ -69,7 +80,7 @@ public class CotacaoService {
     // ===== CoinGecko (Cripto BTC/ETH em BRL) =====
     @SuppressWarnings("unchecked")
     private BigDecimal cotacaoCriptoBRL(String ticker) {
-        String t = ticker.toUpperCase().trim();
+        String t = normalizarTicker(ticker);
 
         // CoinGecko usa ids, não ticker direto
         String id = switch (t) {

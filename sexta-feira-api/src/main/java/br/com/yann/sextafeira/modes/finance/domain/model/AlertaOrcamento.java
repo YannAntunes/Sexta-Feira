@@ -1,16 +1,23 @@
 package br.com.yann.sextafeira.modes.finance.domain.model;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "alertas_orcamento",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"ano", "mes", "categoria", "tipoAlerta"}))
+        uniqueConstraints = @UniqueConstraint(columnNames = {"usuario_id", "ano", "mes", "categoria", "tipoAlerta"}))
 public class AlertaOrcamento {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "usuario_id")
+    private Usuario usuario;
 
     private int ano;
     private int mes;
@@ -18,7 +25,7 @@ public class AlertaOrcamento {
     @Enumerated(EnumType.STRING)
     private CategoriaTransacao categoria;
 
-    // "PERCENT_80" ou "ESTOURO"
+    // "PERCENT_80", "PERCENT_90" ou "ESTOURO"
     private String tipoAlerta;
 
     private LocalDateTime enviadoEm;
@@ -26,6 +33,11 @@ public class AlertaOrcamento {
     public AlertaOrcamento() {}
 
     public AlertaOrcamento(int ano, int mes, CategoriaTransacao categoria, String tipoAlerta, LocalDateTime enviadoEm) {
+        this(null, ano, mes, categoria, tipoAlerta, enviadoEm);
+    }
+
+    public AlertaOrcamento(Usuario usuario, int ano, int mes, CategoriaTransacao categoria, String tipoAlerta, LocalDateTime enviadoEm) {
+        this.usuario = usuario;
         this.ano = ano;
         this.mes = mes;
         this.categoria = categoria;
@@ -34,6 +46,8 @@ public class AlertaOrcamento {
     }
 
     public Long getId() { return id; }
+    public Usuario getUsuario() { return usuario; }
+    public void setUsuario(Usuario usuario) { this.usuario = usuario; }
     public int getAno() { return ano; }
     public int getMes() { return mes; }
     public CategoriaTransacao getCategoria() { return categoria; }

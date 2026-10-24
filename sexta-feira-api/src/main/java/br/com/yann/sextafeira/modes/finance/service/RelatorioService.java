@@ -1,5 +1,7 @@
 package br.com.yann.sextafeira.modes.finance.service;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
+import br.com.yann.sextafeira.identity.service.UsuarioService;
 import br.com.yann.sextafeira.modes.finance.domain.model.AlertaOrcamento;
 import br.com.yann.sextafeira.modes.finance.dto.RelatorioMensalResponse;
 import br.com.yann.sextafeira.modes.finance.dto.ResumoMensalDTO;
@@ -18,22 +20,26 @@ public class RelatorioService {
     private final TransacaoService transacaoService;
     private final ChartsService chartsService;
     private final AlertaOrcamentoRepository alertaRepo;
+    private final UsuarioService usuarioService;
 
     public RelatorioService(TransacaoService transacaoService,
                             ChartsService chartsService,
-                            AlertaOrcamentoRepository alertaRepo) {
+                            AlertaOrcamentoRepository alertaRepo,
+                            UsuarioService usuarioService) {
+        this.usuarioService = usuarioService;
         this.transacaoService = transacaoService;
         this.chartsService = chartsService;
         this.alertaRepo = alertaRepo;
     }
 
     public RelatorioMensalResponse gerarRelatorioMesAtual() {
+        Usuario usuario = usuarioService.obterUsuarioAtual();
 
         YearMonth ym = YearMonth.from(LocalDate.now());
         int ano = ym.getYear();
         int mes = ym.getMonthValue();
 
-        ResumoMensalDTO resumo = transacaoService.calcularResumoMensal(ano, mes);
+        ResumoMensalDTO resumo = transacaoService.calcularResumoMensal(usuario, ano, mes);
 
         String mesAno = String.format("%02d/%d", mes, ano);
 
@@ -66,7 +72,7 @@ public class RelatorioService {
         }
 
         // Alertas reais do banco (já enviados pelo monitoramento)
-        List<AlertaOrcamento> alertasDb = alertaRepo.findByAnoAndMes(ano, mes);
+        List<AlertaOrcamento> alertasDb = new ArrayList<>(alertaRepo.findByUsuarioAndAnoAndMes(usuario, ano, mes));
         alertasDb.sort(Comparator.comparing(AlertaOrcamento::getEnviadoEm).reversed());
 
         List<String> alertas = new ArrayList<>();

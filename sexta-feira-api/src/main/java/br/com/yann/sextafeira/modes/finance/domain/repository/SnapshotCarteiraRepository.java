@@ -1,5 +1,6 @@
 package br.com.yann.sextafeira.modes.finance.domain.repository;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
 import br.com.yann.sextafeira.modes.finance.domain.model.ClasseAtivo;
 import br.com.yann.sextafeira.modes.finance.domain.model.SnapshotCarteira;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -10,20 +11,21 @@ import java.util.Optional;
 
 public interface SnapshotCarteiraRepository extends JpaRepository<SnapshotCarteira, Long> {
 
-    List<SnapshotCarteira> findByData(LocalDate data);
+    List<SnapshotCarteira> findByUsuarioAndData(Usuario usuario, LocalDate data);
 
-    List<SnapshotCarteira> findByDataAndClasse(LocalDate data, ClasseAtivo classe);
+    List<SnapshotCarteira> findByUsuarioAndDataAndClasse(Usuario usuario, LocalDate data, ClasseAtivo classe);
 
-    boolean existsByData(LocalDate data);
+    boolean existsByUsuarioAndData(Usuario usuario, LocalDate data);
 
-    Optional<SnapshotCarteira> findTopByDataLessThanEqualOrderByDataDesc(LocalDate alvo);
+    Optional<SnapshotCarteira> findTopByUsuarioAndDataLessThanEqualOrderByDataDesc(Usuario usuario, LocalDate alvo);
 
-    Optional<SnapshotCarteira> findTopByClasseAndDataLessThanEqualOrderByDataDesc(ClasseAtivo classe, LocalDate alvo);
+    Optional<SnapshotCarteira> findTopByUsuarioAndClasseAndDataLessThanEqualOrderByDataDesc(
+            Usuario usuario, ClasseAtivo classe, LocalDate alvo
+    );
 
-    List<SnapshotCarteira> findByDataBetween(LocalDate inicio, LocalDate fim);
+    List<SnapshotCarteira> findByUsuarioAndDataBetween(Usuario usuario, LocalDate inicio, LocalDate fim);
 
-    List<SnapshotCarteira> findByClasseAndDataBetween(ClasseAtivo classe, LocalDate inicio, LocalDate fim);
-
-
+    List<SnapshotCarteira> findByUsuarioAndClasseAndDataBetween(
+            Usuario usuario, ClasseAtivo classe, LocalDate inicio, LocalDate fim
+    );
 }
-

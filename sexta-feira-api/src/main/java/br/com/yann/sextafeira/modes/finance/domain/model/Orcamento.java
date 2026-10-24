@@ -1,15 +1,25 @@
 package br.com.yann.sextafeira.modes.finance.domain.model;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 
 @Entity
-@Table(name = "orcamentos")
+@Table(
+        name = "orcamentos",
+        uniqueConstraints = @UniqueConstraint(columnNames = {"usuario_id", "ano", "mes", "categoria"})
+)
 public class Orcamento {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "usuario_id")
+    private Usuario usuario;
 
     @Column(nullable = false)
     private Integer ano;
@@ -29,6 +39,14 @@ public class Orcamento {
 
     public Long getId() {
         return id;
+    }
+
+    public Usuario getUsuario() {
+        return usuario;
+    }
+
+    public void setUsuario(Usuario usuario) {
+        this.usuario = usuario;
     }
 
     public Integer getAno() {

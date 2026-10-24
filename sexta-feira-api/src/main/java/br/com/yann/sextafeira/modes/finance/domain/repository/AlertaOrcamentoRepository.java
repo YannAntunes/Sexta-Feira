@@ -1,5 +1,6 @@
 package br.com.yann.sextafeira.modes.finance.domain.repository;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
 import br.com.yann.sextafeira.modes.finance.domain.model.AlertaOrcamento;
 import br.com.yann.sextafeira.modes.finance.domain.model.CategoriaTransacao;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -9,9 +10,9 @@ import java.util.Optional;
 
 public interface AlertaOrcamentoRepository extends JpaRepository<AlertaOrcamento, Long> {
 
-    Optional<AlertaOrcamento> findByAnoAndMesAndCategoriaAndTipoAlerta(
-            int ano, int mes, CategoriaTransacao categoria, String tipoAlerta
+    Optional<AlertaOrcamento> findByUsuarioAndAnoAndMesAndCategoriaAndTipoAlerta(
+            Usuario usuario, int ano, int mes, CategoriaTransacao categoria, String tipoAlerta
     );
 
-    List<AlertaOrcamento> findByAnoAndMes(int ano, int mes);
+    List<AlertaOrcamento> findByUsuarioAndAnoAndMes(Usuario usuario, int ano, int mes);
 }

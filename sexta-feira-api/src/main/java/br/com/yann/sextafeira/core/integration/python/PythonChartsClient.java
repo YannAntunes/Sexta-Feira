@@ -3,17 +3,22 @@ package br.com.yann.sextafeira.core.integration.python;
 import br.com.yann.sextafeira.modes.finance.dto.ChartBudgetRequestDTO;
 import br.com.yann.sextafeira.modes.finance.dto.ChartCategoriaRequestDTO;
 import br.com.yann.sextafeira.modes.finance.dto.ChartSerieRequestDTO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 @Service
 public class PythonChartsClient {
 
+    private static final Logger log = LoggerFactory.getLogger(PythonChartsClient.class);
+
     private final RestTemplate restTemplate;
 
-    @Value("${ia.base-url:http://127.0.0.1:8000}")
+    @Value("${sexta.ia.url:http://127.0.0.1:8000}")
     private String iaBaseUrl;
 
     public PythonChartsClient(RestTemplate restTemplate) {
@@ -21,69 +26,37 @@ public class PythonChartsClient {
     }
 
     public byte[] gerarGraficoGastosPorCategoria(ChartCategoriaRequestDTO req) {
-        String url = iaBaseUrl + "/ia/charts/gastos-por-categoria";
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
-        HttpEntity<ChartCategoriaRequestDTO> entity = new HttpEntity<>(req, headers);
-
-        ResponseEntity<byte[]> resp = restTemplate.exchange(
-                url,
-                HttpMethod.POST,
-                entity,
-                byte[].class
-        );
-
-        if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
-            throw new RuntimeException("Falha ao gerar gráfico no serviço Python");
-        }
-
-        return resp.getBody();
+        return postForPng("/ia/charts/gastos-por-categoria", req, "Falha ao gerar gráfico de gastos por categoria");
     }
 
     public byte[] gerarGraficoOrcamentoVsGasto(ChartBudgetRequestDTO req) {
-        String url = iaBaseUrl + "/ia/charts/orcamento-vs-gasto";
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
-        HttpEntity<ChartBudgetRequestDTO> entity = new HttpEntity<>(req, headers);
-
-        ResponseEntity<byte[]> resp = restTemplate.exchange(
-                url,
-                HttpMethod.POST,
-                entity,
-                byte[].class
-        );
-
-        if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
-            throw new RuntimeException("Falha ao gerar gráfico orçamento vs gasto no serviço Python");
-        }
-
-        return resp.getBody();
+        return postForPng("/ia/charts/orcamento-vs-gasto", req, "Falha ao gerar gráfico de orçamento vs gasto");
     }
 
     public byte[] gerarGraficoSerieLinha(ChartSerieRequestDTO req) {
-        String url = iaBaseUrl + "/ia/charts/serie-linha";
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
-        HttpEntity<ChartSerieRequestDTO> entity = new HttpEntity<>(req, headers);
-
-        ResponseEntity<byte[]> resp = restTemplate.exchange(
-                url,
-                HttpMethod.POST,
-                entity,
-                byte[].class
-        );
-
-        if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
-            throw new RuntimeException("Falha ao gerar gráfico de série (linha) no serviço Python");
-        }
-
-        return resp.getBody();
+        return postForPng("/ia/charts/serie-linha", req, "Falha ao gerar gráfico de série (linha)");
     }
 
+    private <T> byte[] postForPng(String path, T payload, String erroMsg) {
+        String url = iaBaseUrl + path;
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<T> entity = new HttpEntity<>(payload, headers);
+
+        try {
+            ResponseEntity<byte[]> resp = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    entity,
+                    byte[].class
+            );
+            if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
+                throw new IllegalStateException(erroMsg + " no serviço Python.");
+            }
+            return resp.getBody();
+        } catch (RestClientException ex) {
+            log.error("{}: {}", erroMsg, ex.getMessage());
+            throw new IllegalStateException(erroMsg + ": serviço Python indisponível.");
+        }
+    }
 }

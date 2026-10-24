@@ -5,7 +5,6 @@ import br.com.yann.sextafeira.modes.finance.dto.DeletePorTextoRequest;
 import br.com.yann.sextafeira.modes.finance.dto.NaturalLanguageTransacaoRequest;
 import br.com.yann.sextafeira.modes.finance.dto.NaturalLanguageTransacaoResponse;
 import br.com.yann.sextafeira.modes.finance.dto.ResumoMensalDTO;
-import br.com.yann.sextafeira.modes.finance.domain.repository.TransacaoRepository;
 import br.com.yann.sextafeira.modes.finance.service.ai.TransacaoIaService;
 import br.com.yann.sextafeira.modes.finance.service.TransacaoService;
 import org.springframework.http.HttpStatus;
@@ -17,26 +16,24 @@ import java.util.List;
 @RequestMapping("/api/v1/transacoes")
 public class TransacaoController {
 
-    private final TransacaoRepository transacaoRepository;
     private final TransacaoService transacaoService;
     private final TransacaoIaService transacaoIaService;
 
 
-    public TransacaoController(TransacaoRepository transacaoRepository, TransacaoService transacaoService, TransacaoIaService transacaoIaService) {
-        this.transacaoRepository = transacaoRepository;
+    public TransacaoController(TransacaoService transacaoService, TransacaoIaService transacaoIaService) {
         this.transacaoService = transacaoService;
         this.transacaoIaService = transacaoIaService;
     }
 
     @GetMapping
     public List<Transacao> listarTodas() {
-        return transacaoRepository.findAll();
+        return transacaoService.listarTodas();
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Transacao criar(@RequestBody Transacao transacao) {
-        return transacaoRepository.save(transacao);
+        return transacaoService.salvar(transacao);
     }
 
     @GetMapping("/resumo")
@@ -55,7 +52,7 @@ public class TransacaoController {
         var transacaoInterpretada = transacaoIaService.interpretarMensagem(request.getMensagem());
 
         // 2. Salvar como transação normal
-        var transacaoSalva = transacaoRepository.save(transacaoInterpretada);
+        var transacaoSalva = transacaoService.salvar(transacaoInterpretada);
 
         // 3. Devolver resposta
         return new NaturalLanguageTransacaoResponse(

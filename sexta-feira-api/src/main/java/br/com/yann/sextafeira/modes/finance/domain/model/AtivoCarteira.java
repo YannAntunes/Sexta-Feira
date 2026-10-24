@@ -1,5 +1,7 @@
 package br.com.yann.sextafeira.modes.finance.domain.model;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
 import java.math.BigDecimal;
@@ -8,13 +10,18 @@ import java.time.LocalDateTime;
 @Entity
 @Table(
         name = "ativos_carteira",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"classe", "ticker"})
+        uniqueConstraints = @UniqueConstraint(columnNames = {"usuario_id", "classe", "ticker"})
 )
 public class AtivoCarteira {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "usuario_id")
+    private Usuario usuario;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 10)
@@ -27,10 +34,10 @@ public class AtivoCarteira {
     private BigDecimal quantidade = BigDecimal.ZERO;
 
     @Column(precision = 19, scale = 8)
-    private BigDecimal precoMedio; // opcional (pode ficar null no começo)
+    private BigDecimal precoMedio;
 
     @Column(length = 10)
-    private String moedaBase = "BRL"; // BRL, USD (cripto pode ser BRL)
+    private String moedaBase = "BRL";
 
     @Column(nullable = false)
     private LocalDateTime criadoEm = LocalDateTime.now();
@@ -45,12 +52,20 @@ public class AtivoCarteira {
         this.ticker = ticker;
     }
 
+    public AtivoCarteira(Usuario usuario, ClasseAtivo classe, String ticker) {
+        this.usuario = usuario;
+        this.classe = classe;
+        this.ticker = ticker;
+    }
+
     @PreUpdate
     public void preUpdate() {
         this.atualizadoEm = LocalDateTime.now();
     }
 
     public Long getId() { return id; }
+    public Usuario getUsuario() { return usuario; }
+    public void setUsuario(Usuario usuario) { this.usuario = usuario; }
     public ClasseAtivo getClasse() { return classe; }
     public void setClasse(ClasseAtivo classe) { this.classe = classe; }
 

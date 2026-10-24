@@ -1,5 +1,7 @@
 package br.com.yann.sextafeira.modes.finance.domain.model;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
 import java.math.BigDecimal;
@@ -14,6 +16,11 @@ public class MovimentoCarteira {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "usuario_id")
+    private Usuario usuario;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 10)
     private ClasseAtivo classe; // ACAO/FII/CRIPTO
@@ -25,25 +32,20 @@ public class MovimentoCarteira {
     @Column(nullable = false, length = 20)
     private TipoMovimentoCarteira tipo; // COMPRA/VENDA/APORTE_BRL
 
-    // Quantidade movimentada (ex: 10 PETR4, 0.00009 BTC)
     @Column(precision = 19, scale = 8)
     private BigDecimal quantidade;
 
-    // Preço unitário em BRL no momento do movimento (se conseguir cotação)
     @Column(name = "preco_unit_brl", precision = 19, scale = 8)
     private BigDecimal precoUnitBRL;
 
-    // Valor total em BRL (ex: 10 * 38.40 = 384.00) OU o aporte informado
     @Column(name = "valor_brl", precision = 19, scale = 8)
     private BigDecimal valorBRL;
 
-    // Data "do usuário" (se veio do texto) e também timestamp do registro
     private LocalDate data;
 
     @Column(nullable = false)
     private LocalDateTime criadoEm = LocalDateTime.now();
 
-    // Texto original (opcional, mas ajuda demais a debugar)
     @Column(length = 300)
     private String observacao;
 
@@ -55,6 +57,12 @@ public class MovimentoCarteira {
         this.tipo = tipo;
     }
 
+    public MovimentoCarteira(Usuario usuario, ClasseAtivo classe, String ticker, TipoMovimentoCarteira tipo) {
+        this.usuario = usuario;
+        this.classe = classe;
+        this.ticker = ticker;
+        this.tipo = tipo;
+    }
 
     public MovimentoCarteira(ClasseAtivo classe,
                              String ticker,
@@ -75,7 +83,8 @@ public class MovimentoCarteira {
     }
 
     public Long getId() { return id; }
-
+    public Usuario getUsuario() { return usuario; }
+    public void setUsuario(Usuario usuario) { this.usuario = usuario; }
 
     public ClasseAtivo getClasse() { return classe; }
     public void setClasse(ClasseAtivo classe) { this.classe = classe; }

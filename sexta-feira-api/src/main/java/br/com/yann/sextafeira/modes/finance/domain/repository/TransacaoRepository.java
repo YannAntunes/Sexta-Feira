@@ -1,5 +1,6 @@
 package br.com.yann.sextafeira.modes.finance.domain.repository;
 
+import br.com.yann.sextafeira.identity.domain.Usuario;
 import br.com.yann.sextafeira.modes.finance.domain.model.TipoTransacao;
 import br.com.yann.sextafeira.modes.finance.domain.model.Transacao;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -12,20 +13,24 @@ import java.util.Optional;
 
 public interface TransacaoRepository extends JpaRepository<Transacao, Long> {
 
-    Optional<Transacao> findTopByOrderByIdDesc();
+    List<Transacao> findByUsuarioOrderByDataDescIdDesc(Usuario usuario);
 
-    List<Transacao> findByDataBetween(LocalDate inicio, LocalDate fim);
+    Optional<Transacao> findTopByUsuarioOrderByIdDesc(Usuario usuario);
 
-    List<Transacao> findByDataBetweenOrderByDataDescIdDesc(LocalDate inicio, LocalDate fim);
+    List<Transacao> findByUsuarioAndDataBetween(Usuario usuario, LocalDate inicio, LocalDate fim);
+
+    List<Transacao> findByUsuarioAndDataBetweenOrderByDataDescIdDesc(Usuario usuario, LocalDate inicio, LocalDate fim);
 
     @Query("""
         select t.categoria as categoria, coalesce(sum(t.valor), 0)
         from Transacao t
-        where t.tipo = :tipo
+        where t.usuario = :usuario
+          and t.tipo = :tipo
           and t.data between :inicio and :fim
         group by t.categoria
     """)
-    List<Object[]> somarPorCategoriaNoPeriodo(@Param("tipo") TipoTransacao tipo,
+    List<Object[]> somarPorCategoriaNoPeriodo(@Param("usuario") Usuario usuario,
+                                              @Param("tipo") TipoTransacao tipo,
                                               @Param("inicio") LocalDate inicio,
                                               @Param("fim") LocalDate fim);
 }
