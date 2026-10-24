@@ -188,7 +188,16 @@ public class AssistenteService {
             }
 
             case "DELETE_TRANSACTION" -> {
-                Transacao removida = transacaoService.removerPorTexto(mensagem);
+                Transacao removida;
+                if (rota.getEntities() != null && "undo_last".equals(rota.getEntities().get("action"))) {
+                    removida = transacaoService.removerUltimaTransacao(usuario);
+                } else {
+                    try {
+                        removida = transacaoService.removerPorTexto(usuario, mensagem);
+                    } catch (Exception ex) {
+                        removida = transacaoService.removerUltimaTransacao(usuario);
+                    }
+                }
                 yield new ChatResponse(String.format(
                         "Feito. Apaguei: %s de R$ %.2f em %s (%s).\n%s",
                         removida.getTipo().name(),
@@ -680,6 +689,43 @@ public class AssistenteService {
                 yield new ChatResponse(String.format(
                         "Fechado. Converti R$ %.2f em %s (%s) e somei na sua carteira. ✅",
                         valorBRL, ticker, classe.name()
+                ));
+            }
+
+            case "CLARIFICATION_REQUIRED" -> {
+                String prompt = (rota.getEntities() != null && rota.getEntities().get("clarification_prompt") != null)
+                        ? rota.getEntities().get("clarification_prompt").toString()
+                        : "Entendi que houve uma movimentação, mas faltou o valor exato. Quanto foi?";
+                yield new ChatResponse(prompt);
+            }
+
+            case "CORRECTION" -> {
+                if (rota.getEntities() == null || rota.getEntities().get("novo_valor") == null) {
+                    yield new ChatResponse("Qual é o novo valor que você quer registrar? Ex: \"não, quis dizer 50\". 😉");
+                }
+                BigDecimal novoValor = new BigDecimal(rota.getEntities().get("novo_valor").toString());
+                Transacao corrigida = transacaoService.corrigirValorUltimaTransacao(usuario, novoValor);
+                yield new ChatResponse(String.format(
+                        "Entendido. Corrigi o último lançamento de %s para R$ %.2f. Quase anotei errado por sua causa. 😌",
+                        formatarCategoria(corrigida.getCategoria()),
+                        corrigida.getValor()
+                ));
+            }
+
+            case "ASK_FINANCES_CHART" -> {
+                yield new ChatResponse("📊 Abrindo o gráfico de despesas categorizadas na sua interface agora mesmo. Dê uma olhada na distribuição dos seus gastos! 😌");
+            }
+
+            case "ASK_FINANCES_OVERVIEW" -> {
+                YearMonth ym = YearMonth.from(LocalDate.now());
+                ResumoMensalDTO resumo = transacaoService.calcularResumoMensal(usuario, ym.getYear(), ym.getMonthValue());
+                yield new ChatResponse(String.format(
+                        "📌 Situação das suas finanças em %02d/%d:\n- Receitas: R$ %.2f\n- Despesas: R$ %.2f\n- Saldo líquido: R$ %.2f\n\n%s",
+                        resumo.getMes(), resumo.getAno(),
+                        resumo.getTotalReceitas(), resumo.getTotalDespesas(), resumo.getSaldo(),
+                        resumo.getSaldo().signum() >= 0
+                                ? "Tudo sob controle. Pode respirar aliviado. 😌"
+                                : "Você gastou mais do que ganhou este mês. Hora de fechar a torneira. 🚨"
                 ));
             }
 

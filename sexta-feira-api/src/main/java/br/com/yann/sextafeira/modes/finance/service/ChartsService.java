@@ -4,6 +4,7 @@ import br.com.yann.sextafeira.identity.service.UsuarioService;
 import br.com.yann.sextafeira.modes.finance.domain.model.CategoriaTransacao;
 import br.com.yann.sextafeira.modes.finance.domain.model.TipoTransacao;
 import br.com.yann.sextafeira.modes.finance.domain.model.Transacao;
+import br.com.yann.sextafeira.modes.finance.dto.BalancoMensalDTO;
 import br.com.yann.sextafeira.modes.finance.dto.ChartBudgetItemDTO;
 import br.com.yann.sextafeira.modes.finance.domain.repository.TransacaoRepository;
 import org.springframework.beans.factory.annotation.Value;
@@ -147,5 +148,59 @@ public class ChartsService {
         } catch (org.springframework.web.client.RestClientException ex) {
             throw new IllegalStateException("Serviço Python de gráficos indisponível.");
         }
+    }
+    public Map<String, BigDecimal> receitasPorCategoriaDoMesAtual() {
+        YearMonth ym = YearMonth.from(LocalDate.now());
+        LocalDate inicio = ym.atDay(1);
+        LocalDate fim = ym.atEndOfMonth();
+
+        List<Transacao> transacoes = transacaoRepository.findByUsuarioAndDataBetween(usuarioService.obterUsuarioAtual(), inicio, fim);
+
+        Map<String, BigDecimal> soma = new HashMap<>();
+
+        for (Transacao t : transacoes) {
+            if (t.getTipo() != TipoTransacao.RECEITA) continue;
+
+            String cat = t.getCategoria().name();
+            soma.putIfAbsent(cat, BigDecimal.ZERO);
+            soma.put(cat, soma.get(cat).add(t.getValor()));
+        }
+
+        return soma.entrySet().stream()
+                .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
+                .collect(LinkedHashMap::new,
+                        (m, e) -> m.put(e.getKey(), e.getValue()),
+                        Map::putAll);
+    }
+
+    public BalancoMensalDTO balancoReceitasVsDespesasMesAtual() {
+        YearMonth ym = YearMonth.from(LocalDate.now());
+        LocalDate inicio = ym.atDay(1);
+        LocalDate fim = ym.atEndOfMonth();
+
+        List<Transacao> transacoes = transacaoRepository.findByUsuarioAndDataBetween(usuarioService.obterUsuarioAtual(), inicio, fim);
+
+        BigDecimal totalReceitas = BigDecimal.ZERO;
+        BigDecimal totalDespesas = BigDecimal.ZERO;
+
+        for (Transacao t : transacoes) {
+            if (t.getTipo() == TipoTransacao.RECEITA) {
+                totalReceitas = totalReceitas.add(t.getValor());
+            } else if (t.getTipo() == TipoTransacao.DESPESA) {
+                totalDespesas = totalDespesas.add(t.getValor());
+            }
+        }
+
+        BigDecimal saldo = totalReceitas.subtract(totalDespesas);
+        BigDecimal taxaPoupanca = BigDecimal.ZERO;
+        if (totalReceitas.compareTo(BigDecimal.ZERO) > 0) {
+            taxaPoupanca = saldo.max(BigDecimal.ZERO)
+                    .divide(totalReceitas, 4, java.math.RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100))
+                    .setScale(1, java.math.RoundingMode.HALF_UP);
+        }
+
+        String mesAno = String.format("%02d/%d", ym.getMonthValue(), ym.getYear());
+        return new BalancoMensalDTO(totalReceitas, totalDespesas, saldo, taxaPoupanca, transacoes.size(), mesAno);
     }
 }

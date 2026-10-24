@@ -1,14 +1,14 @@
 import React from 'react';
-import { HologramState, PersonalityType, UserProfile } from '../../types';
-import { Shield, Sparkles, Bell, BarChart3, LogOut, Radio } from 'lucide-react';
+import { HologramState, UserProfile } from '../../types';
+import { Sparkles, Bell, BarChart3, LogOut, Radio, Volume2 } from 'lucide-react';
 
 interface HudHeaderProps {
   state: HologramState;
   user: UserProfile | null;
   unreadCount: number;
   onOpenNotifications: () => void;
-  onToggleSidebar: () => void;
-  onChangePersonality: (p: PersonalityType) => void;
+  onOpenCharts: () => void;
+  onOpenVoiceSettings?: () => void;
   onLogout: () => void;
 }
 
@@ -26,8 +26,8 @@ export const HudHeader: React.FC<HudHeaderProps> = ({
   user,
   unreadCount,
   onOpenNotifications,
-  onToggleSidebar,
-  onChangePersonality,
+  onOpenCharts,
+  onOpenVoiceSettings,
   onLogout,
 }) => {
   const currentStatus = STATE_LABELS[state];
@@ -57,31 +57,15 @@ export const HudHeader: React.FC<HudHeaderProps> = ({
         </div>
       </div>
 
-      {/* Centro: Modos de Personalidade */}
-      {user && (
-        <div className="hidden lg:flex items-center gap-1 p-1 rounded border border-hologram-cyan/20 bg-void-900/50 backdrop-blur-md">
-          {(['SEXTA_FEIRA', 'FORMAL', 'AMIGAVEL', 'JARVIS'] as PersonalityType[]).map((p) => {
-            const active = user.personalidade === p;
-            return (
-              <button
-                key={p}
-                onClick={() => onChangePersonality(p)}
-                className={`px-2.5 py-1 text-xs font-mono rounded transition-all duration-200 flex items-center gap-1.5 ${
-                  active
-                    ? 'bg-hologram-cyan/20 text-hologram-cyan border border-hologram-cyan/50 shadow-glow-cyan'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                }`}
-              >
-                {p === 'JARVIS' && <Shield className="w-3 h-3" />}
-                {p === 'SEXTA_FEIRA' && <Sparkles className="w-3 h-3" />}
-                {p.replace('_', '-')}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* Centro: Identidade Unificada e Coerente da Sexta-Feira */}
+      <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full border border-hologram-cyan/25 bg-void-900/60 backdrop-blur-md shadow-glow-cyan/10">
+        <Sparkles className="w-3.5 h-3.5 text-hologram-cyan animate-pulse" />
+        <span className="font-mono text-xs font-semibold tracking-wider text-slate-200">
+          SISTEMA SEXTA-FEIRA // IA PESSOAL
+        </span>
+      </div>
 
-      {/* Lado Direito: Notificações, Telemetria Financeira e Perfil */}
+      {/* Lado Direito: Notificações, Telemetria Gráfica e Perfil */}
       <div className="flex items-center gap-2">
         {/* Botão de Notificações In-App */}
         <button
@@ -97,14 +81,27 @@ export const HudHeader: React.FC<HudHeaderProps> = ({
           )}
         </button>
 
-        {/* Botão do Painel de Telemetria Financeira */}
+        {/* Botão de Gráficos e Telemetria Financeira Interativa */}
         <button
-          onClick={onToggleSidebar}
-          className="p-2 rounded border border-slate-700/60 bg-void-900/40 text-slate-300 hover:text-hologram-cyan hover:border-hologram-cyan/50 transition-colors"
-          title="Telemetria Financeira"
+          onClick={onOpenCharts}
+          className="p-2 rounded border border-slate-700/60 bg-void-900/40 text-slate-300 hover:text-hologram-cyan hover:border-hologram-cyan/50 transition-colors flex items-center gap-1.5"
+          title="Dashboard de Gráficos e Telemetria"
         >
-          <BarChart3 className="w-4 h-4" />
+          <BarChart3 className="w-4 h-4 text-hologram-cyan" />
+          <span className="hidden md:inline font-mono text-xs text-slate-300">Gráficos</span>
         </button>
+
+        {/* Botão de Voz e TTS */}
+        {onOpenVoiceSettings && (
+          <button
+            onClick={onOpenVoiceSettings}
+            className="p-2 rounded border border-slate-700/60 bg-void-900/40 text-slate-300 hover:text-hologram-cyan hover:border-hologram-cyan/50 transition-colors flex items-center gap-1.5"
+            title="Configurações de Voz e Fala"
+          >
+            <Volume2 className="w-4 h-4 text-hologram-cyan" />
+            <span className="hidden lg:inline font-mono text-xs text-slate-300">Voz</span>
+          </button>
+        )}
 
         {/* Informações do Usuário & Logout */}
         {user && (

@@ -17,6 +17,23 @@ import os
 import json
 import urllib.request
 import urllib.error
+import logging
+import time
+from core.nlu_engine import (
+    analisar_mensagem,
+    extrair_valor_inteligente,
+    classificar_categoria_inteligente,
+)
+
+logger = logging.getLogger("sexta_ia_diagnostic")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+def mascarar_dados_sensiveis(texto: str) -> str:
+    """Mascara CPFs e numeros de cartao preservando formato sem expor segredos."""
+    texto = re.sub(r"\b(?:\d[ -]*?){13,19}\b", lambda m: "****-****-****-" + re.sub(r"\D", "", m.group(0))[-4:], texto)
+    texto = re.sub(r"\b\d{3}\.?\d{3}\.?\d{3}[-.]?\d{2}\b", "***.***.***-**", texto)
+    return texto
 
 
 app = FastAPI(title="SEXTA-FEIRA IA Service")
@@ -126,7 +143,17 @@ def extrair_valor(mensagem: str) -> Decimal | None:
 
 def determinar_tipo(mensagem: str) -> str:
     m = mensagem.lower()
-    if "recebi" in m or "salario" in m or "salário" in m or "ganhei" in m:
+    termos_receita = [
+        "recebi", "recebido", "recebimento", "salario", "salário", "ganhei",
+        "vendi", "venda", "rendimento", "rendimentos", "dividendo", "dividendos",
+        "lucro", "provento", "proventos", "depósito", "deposito", "entrada",
+        "pingou", "caiu", "entrou", "estorno", "cashback", "remuneração",
+        "remuneracao", "resgate", "resgatei", "received", "earned", "salary",
+        "income", "sold", "dividend"
+    ]
+    if any(t in m for t in termos_receita):
+        if ("gastei" in m or "paguei" in m or "comprei" in m or "torrei" in m) and not ("vendi" in m or "resgatei" in m):
+            return "DESPESA"
         return "RECEITA"
     return "DESPESA"
 
@@ -733,12 +760,18 @@ def health():
 def interpretar_transacao(request: MensagemRequest):
     mensagem = request.mensagem
 
-    valor = extrair_valor(mensagem)
+    valor = extrair_valor_inteligente(mensagem)
+    if valor is None:
+        valor = extrair_valor(mensagem)
     if valor is None:
         valor = Decimal("0.00")
 
     tipo = determinar_tipo(mensagem)
-    categoria = determinar_categoria(mensagem)
+    categoria_smart, item = classificar_categoria_inteligente(mensagem)
+    if categoria_smart != "OUTROS" or item != "geral":
+        categoria = categoria_smart
+    else:
+        categoria = determinar_categoria(mensagem)
 
     return TransacaoInterpretada(
         valor=valor,
@@ -751,14 +784,36 @@ def interpretar_transacao(request: MensagemRequest):
 
 @app.post("/ia/router", response_model=RouterResponse)
 def router(request: MensagemRequest):
+    t_inicio = time.perf_counter()
+    resp = _processar_router(request)
+    duracao_ms = (time.perf_counter() - t_inicio) * 1000
+    msg_redigida = mascarar_dados_sensiveis(request.mensagem)
+    logger.info(
+        f"[NLU-DIAGNOSTIC] Input='{msg_redigida}' | Intent='{resp.intent}' | Lang='{resp.lang}' | Duration={duracao_ms:.2f}ms | Entities={resp.entities}"
+    )
+    return resp
+
+def _processar_router(request: MensagemRequest) -> RouterResponse:
     # 1. Roteamento Semantico via LLM (quando habilitada, configurada e responsiva)
     resultado_llm = tentar_roteamento_llm(request)
     if resultado_llm is not None:
         return resultado_llm
 
-    # 2. Fallback Deterministico por Expressoes Regulares e Palavras-Chave
+    # 2. Pipeline de NLU em Linguagem Natural Avancada (Portugues Coloquial & Ingles)
     mensagem = request.mensagem
     lang = detectar_idioma(mensagem)
+
+    nlu_resultado = analisar_mensagem(mensagem, request.historico)
+    if nlu_resultado.get("intent") != "UNKNOWN":
+        nlu_intent = nlu_resultado["intent"]
+        nlu_entities = dict(nlu_resultado.get("entities", {}))
+        if "data" not in nlu_entities:
+            nlu_entities["data"] = str(interpretar_data(mensagem))
+        if nlu_resultado.get("needs_clarification") and "clarification_prompt" in nlu_resultado:
+            nlu_entities["clarification_prompt"] = nlu_resultado["clarification_prompt"]
+        return RouterResponse(intent=nlu_intent, entities=nlu_entities, lang=lang)
+
+    # 3. Fallback Deterministico por Expressoes Regulares e Palavras-Chave
     intent = detectar_intencao(mensagem)
 
     m = mensagem  # texto original

@@ -1,4 +1,4 @@
-import { AuthTokens, ChatMessage, Notificacao, ResumoFinanceiro, StatusOrcamento, UserProfile } from '../types';
+import { AuthTokens, BalancoMensal, ChatMessage, Notificacao, ResumoFinanceiro, StatusOrcamento, UserProfile } from '../types';
 
 const API_BASE = '/api/v1';
 
@@ -165,6 +165,37 @@ class ApiService {
     getBudgetOverview: async (ano?: number, mes?: number): Promise<StatusOrcamento[]> => {
       const query = (ano && mes) ? `?ano=${ano}&mes=${mes}` : '';
       return this.request<StatusOrcamento[]>(`/orcamentos/resumo${query}`);
+    },
+
+    getCategoryExpenses: async (): Promise<Record<string, number>> => {
+      return this.request<Record<string, number>>('/charts/gastos-categoria/dados');
+    },
+
+    getRevenueCategories: async (): Promise<Record<string, number>> => {
+      return this.request<Record<string, number>>('/charts/receitas-categoria/dados');
+    },
+
+    getMonthlyBalance: async (): Promise<BalancoMensal> => {
+      return this.request<BalancoMensal>('/charts/balanco-mensal/dados');
+    },
+
+    getBudgetVsExpenses: async (): Promise<Array<{ categoria: string; orcamento: number; gasto: number }>> => {
+      return this.request<Array<{ categoria: string; orcamento: number; gasto: number }>>('/charts/orcamento-gasto/dados');
+    },
+
+    getDailyExpensesSeries: async (): Promise<Record<string, number>> => {
+      return this.request<Record<string, number>>('/charts/serie-gastos/dados');
+    },
+
+    getChartPngBlobUrl: async (chartType: 'gastos-mes' | 'orcamento-vs-gasto' | 'evolucao-gastos-mes' | 'carteira'): Promise<string> => {
+      const endpoint = chartType === 'carteira' ? '/carteira/grafico?range=THIS_MONTH' : `/charts/${chartType}.png`;
+      const token = this.getAccessToken();
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error('Falha ao carregar gráfico');
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
     },
   };
 }

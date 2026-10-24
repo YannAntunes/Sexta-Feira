@@ -98,6 +98,22 @@ public class TransacaoService {
     }
 
     @Transactional
+    public Transacao corrigirValorUltimaTransacao(Usuario usuario, BigDecimal novoValor) {
+        if (novoValor == null || novoValor.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("O novo valor deve ser maior que zero.");
+        }
+        var ultima = transacaoRepository.findTopByUsuarioOrderByIdDesc(usuario)
+                .orElseThrow(() -> new RuntimeException("Não encontrei nenhuma transação recente para corrigir."));
+        ultima.setValor(novoValor);
+        return transacaoRepository.save(ultima);
+    }
+
+    @Transactional
+    public Transacao corrigirValorUltimaTransacao(BigDecimal novoValor) {
+        return corrigirValorUltimaTransacao(usuarioService.obterUsuarioAtual(), novoValor);
+    }
+
+    @Transactional
     public Transacao removerPorTexto(String mensagem) {
         return removerPorTexto(usuarioService.obterUsuarioAtual(), mensagem);
     }

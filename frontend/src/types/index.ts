@@ -61,6 +61,18 @@ export interface StatusOrcamento {
   ano: number;
   limite: number;
   gasto: number;
-  restante: number;
-  estourado: boolean;
+  saldoRestante?: number;
+  restante?: number;
+  percentualConsumido?: number;
+  alerta?: string;
+  estourado?: boolean;
+}
+
+export interface BalancoMensal {
+  totalReceitas: number;
+  totalDespesas: number;
+  saldo: number;
+  taxaPoupanca: number;
+  totalTransacoes: number;
+  mesAno: string;
 }

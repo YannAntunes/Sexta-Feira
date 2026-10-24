@@ -66,7 +66,10 @@ public class FrasesService {
                         "Mensagem vazia? Até meu sarcasmo precisa de pelo menos uma palavra pra trabalhar. 😏"
                 )),
                 entry("ERRO_UNKNOWN", List.of(
-                        "Não entendi. Reformula isso como se eu fosse uma IA milionária, por favor. 😏"
+                        "Não consegui identificar a operação com certeza. Pode me dizer de forma mais direta, como \"Gastei 50 no almoço\" ou \"Recebi 2000\"? 😉",
+                        "Essa mensagem me deixou em dúvida. Se foi um gasto ou receita, me informa o valor e o que foi pra eu registrar direitinho. 😌",
+                        "Ainda não processei esse comando. Tenta reformular com termos financeiros claros que eu resolvo num instante. 😏",
+                        "Faltou clareza na movimentação. Me dá os detalhes (valor e categoria) para eu não bagunçar suas finanças. 🧐"
                 )),
                 entry("SALDO_POSITIVO", List.of(
                         "você está no azul. Tenta não estragar isso. 😌"

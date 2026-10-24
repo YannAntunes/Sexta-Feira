@@ -187,6 +187,8 @@ export const HologramCanvas: React.FC<HologramCanvasProps> = ({
     // --- 7. Loop de Renderização Contínuo ---
     let animationFrameId: number;
     let clock = new THREE.Clock();
+    let smoothedAudio = 0;
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
@@ -194,6 +196,9 @@ export const HologramCanvas: React.FC<HologramCanvasProps> = ({
       const currentState = stateRef.current;
       const currentAudio = audioLevelRef.current;
       const theme = STATE_COLORS[currentState];
+
+      // Filtro passa-baixas temporal (lerp 0.12) para amortecer saltos bruscos de áudio e evitar serrilhado
+      smoothedAudio += (currentAudio - smoothedAudio) * 0.12;
 
       // Transição suave de cores
       coreMat.color.lerp(new THREE.Color(theme.primary), 0.08);
@@ -210,34 +215,35 @@ export const HologramCanvas: React.FC<HologramCanvasProps> = ({
       hologramGroup.rotation.y += (targetRotationY - hologramGroup.rotation.y) * 0.05;
       hologramGroup.rotation.x += (targetRotationX - hologramGroup.rotation.x) * 0.05;
 
-      // Dinâmica de acordo com o estado do sistema
-      let speedMult = 1.0;
-      let pulseAmp = 0.05;
+      // Dinâmica de acordo com o estado do sistema e sensibilidade de movimento
+      let speedMult = prefersReducedMotion ? 0.2 : 1.0;
+      let pulseAmp = prefersReducedMotion ? 0.02 : 0.04;
 
       switch (currentState) {
         case 'IDLE':
-          speedMult = 0.8;
-          pulseAmp = 0.04;
+          speedMult *= 0.8;
+          pulseAmp = prefersReducedMotion ? 0.01 : 0.03 + Math.sin(elapsedTime * 1.5) * 0.015;
           break;
         case 'LISTENING':
-          speedMult = 1.2;
-          pulseAmp = 0.15 + currentAudio * 0.65; // Expansão reativa à voz do usuário
+          speedMult *= 1.2;
+          pulseAmp = Math.min(0.2, (0.07 + smoothedAudio * 0.4) * (prefersReducedMotion ? 0.3 : 1.0)); // Expansão reativa à voz suave
           break;
         case 'THINKING':
-          speedMult = 3.2; // Aceleração no raciocínio
-          pulseAmp = 0.1 + Math.sin(elapsedTime * 8) * 0.12;
+          speedMult *= 2.5; // Aceleração no raciocínio
+          pulseAmp = (0.06 + Math.sin(elapsedTime * 6) * 0.04) * (prefersReducedMotion ? 0.3 : 1.0);
           break;
         case 'SPEAKING':
-          speedMult = 1.6;
-          pulseAmp = 0.12 + currentAudio * 0.55; // Ondulação no ritmo da fala
+          speedMult *= 1.4;
+          // Trava de amplitude com lerp orgânico: elimina glitches, jitter e deformações erráticas
+          pulseAmp = Math.min(0.18, (0.06 + smoothedAudio * 0.32) * (prefersReducedMotion ? 0.3 : 1.0));
           break;
         case 'PROCESSING':
-          speedMult = 2.0;
-          pulseAmp = 0.08;
+          speedMult *= 1.8;
+          pulseAmp = 0.05;
           break;
         case 'ERROR':
-          speedMult = 0.5;
-          pulseAmp = 0.08 + (Math.random() - 0.5) * 0.06; // Glitch estático
+          speedMult *= 0.4;
+          pulseAmp = 0.06 + (Math.random() - 0.5) * 0.03; // Glitch estático sutil e controlado
           break;
       }
 
@@ -252,16 +258,17 @@ export const HologramCanvas: React.FC<HologramCanvasProps> = ({
         ring.scale.set(ringScale, ringScale, ringScale);
       });
 
-      // 2. Pulso e deformação de vértices do núcleo
+      // 2. Pulso e deformação harmônica suave dos vértices do núcleo
       const positions = coreGeo.attributes.position;
       const count = positions.count;
+      const clampedAmp = Math.min(pulseAmp, 0.2);
       for (let i = 0; i < count; i++) {
         const ox = originalCorePositions.getX(i);
         const oy = originalCorePositions.getY(i);
         const oz = originalCorePositions.getZ(i);
 
-        // Deformação harmônica esférica
-        const wave = Math.sin(elapsedTime * 3 + ox * 2 + oy * 2) * pulseAmp;
+        // Deformação harmônica suave e contínua sem quebra de topologia
+        const wave = Math.sin(elapsedTime * 3.5 + ox * 1.8 + oy * 1.8) * clampedAmp;
         positions.setXYZ(i, ox * (1 + wave), oy * (1 + wave), oz * (1 + wave));
       }
       positions.needsUpdate = true;

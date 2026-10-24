@@ -1,6 +1,7 @@
 package br.com.yann.sextafeira.modes.finance.controller;
 
 import br.com.yann.sextafeira.modes.finance.dto.*;
+import br.com.yann.sextafeira.modes.finance.dto.BalancoMensalDTO;
 import br.com.yann.sextafeira.modes.finance.service.ChartsService;
 import br.com.yann.sextafeira.core.integration.python.PythonChartsClient;
 import org.springframework.http.MediaType;
@@ -84,5 +85,27 @@ public class ChartsController {
                 .body(png);
     }
 
+    @GetMapping("/gastos-categoria/dados")
+    public ResponseEntity<java.util.Map<String, java.math.BigDecimal>> gastosCategoriaDados() {
+        return ResponseEntity.ok(chartsService.gastosPorCategoriaDoMesAtual());
+    }
 
+    @GetMapping("/orcamento-gasto/dados")
+    public ResponseEntity<List<ChartBudgetItemDTO>> orcamentoGastoDados() {
+        return ResponseEntity.ok(chartsService.orcamentoVsGastoMesAtual());
+    }
+
+    @GetMapping("/serie-gastos/dados")
+    public ResponseEntity<java.util.Map<LocalDate, java.math.BigDecimal>> serieGastosDados() {
+        return ResponseEntity.ok(chartsService.serieGastosDiariosMesAtual());
+    }
+    @GetMapping("/receitas-categoria/dados")
+    public ResponseEntity<java.util.Map<String, java.math.BigDecimal>> receitasCategoriaDados() {
+        return ResponseEntity.ok(chartsService.receitasPorCategoriaDoMesAtual());
+    }
+
+    @GetMapping("/balanco-mensal/dados")
+    public ResponseEntity<BalancoMensalDTO> balancoMensalDados() {
+        return ResponseEntity.ok(chartsService.balancoReceitasVsDespesasMesAtual());
+    }
 }
