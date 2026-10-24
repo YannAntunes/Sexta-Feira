@@ -46,6 +46,9 @@ $RequiredDocs = @(
     "AGENTS.md",
     "README.md",
     "docs\PROJECT_AUDIT.md",
+    "docs\FRONTEND_INTEGRATION_AUDIT.md",
+    "docs\MULTIPLATFORM_PACKAGING.md",
+    "frontend\docs\DESIGN_SYSTEM.md",
     "docs\ARCHITECTURE.md",
     "docs\CODING_STANDARDS.md",
     "docs\TESTING_STRATEGY.md",
@@ -161,6 +164,28 @@ if (Test-Path $MvnCmd) {
     }
 } else {
     Write-GateResult "GATE-05 (Testes Java - sexta-feira-api)" "FAIL" "mvnw.cmd nao encontrado em $JavaDir"
+}
+
+# ------------------------------------------------------------------
+# GATE 6: Build e Verificacao Estatica do Frontend (React + TS + Vite)
+# ------------------------------------------------------------------
+$FrontendDir = Join-Path $RepoRoot "frontend"
+if (Test-Path (Join-Path $FrontendDir "package.json")) {
+    Push-Location $FrontendDir
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $buildOut = & npm.cmd run build 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) {
+            Write-GateResult "GATE-06 (Frontend Build - React 19 + TypeScript)" "PASS" "Build de producao do frontend (tsc + vite) concluido com sucesso."
+        } else {
+            Write-Host $buildOut
+            Write-GateResult "GATE-06 (Frontend Build - React 19 + TypeScript)" "FAIL" "Falha na compilacao TypeScript ou no build Vite do frontend."
+        }
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        Pop-Location
+    }
 }
 
 Write-Host "============================================================" -ForegroundColor Cyan
