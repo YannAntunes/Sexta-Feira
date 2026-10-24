@@ -1,5 +1,9 @@
 import unittest
 import sys
+import os
+import io
+import urllib.error
+from unittest.mock import patch
 from pathlib import Path
 from decimal import Decimal
 
@@ -104,6 +108,28 @@ class SextaFeiraIaSmokeTest(unittest.TestCase):
         # Mesmo com mensagem complexa, funciona via fallback determinístico
         res = main.router(MensagemRequest(mensagem="gastei 50 no almoço"))
         self.assertEqual(res.intent, "ADD_TRANSACTION")
+
+    def test_llm_routing_sucesso_quando_habilitada(self):
+        fake_json = '{"choices": [{"message": {"content": "{\\"intent\\": \\"ASK_SAVING_TIPS\\", \\"entities\\": {}}"}}]}'
+        fake_response = io.BytesIO(fake_json.encode("utf-8"))
+
+        with patch.dict(os.environ, {"LLM_ENABLED": "true", "LLM_API_KEY": "fake-key", "LLM_BASE_URL": "https://api.openai.com/v1"}):
+            with patch("urllib.request.urlopen", return_value=fake_response):
+                req = MensagemRequest(mensagem="como posso economizar mais este mês?")
+                res = main.router(req)
+                self.assertEqual(res.intent, "ASK_SAVING_TIPS")
+
+    def test_llm_fallback_quando_llm_lanca_timeout_ou_erro(self):
+        with patch.dict(os.environ, {"LLM_ENABLED": "true", "LLM_API_KEY": "fake-key"}):
+            with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("Connection timed out")):
+                req = MensagemRequest(mensagem="gastei 30 no mercado")
+                res = main.router(req)
+                # Fallback determinístico assume e classifica normalmente via regex
+                self.assertEqual(res.intent, "ADD_TRANSACTION")
+
+    def test_entrypoint_app_main_garante_instancia_identica(self):
+        from app import main as app_main
+        self.assertIs(app_main.app, main.app)
 
     def test_charts_generation_returns_png(self):
         r1 = main.chart_gastos_por_categoria(

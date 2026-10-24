@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+﻿from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from datetime import date, timedelta
 from decimal import Decimal
@@ -751,6 +751,12 @@ def interpretar_transacao(request: MensagemRequest):
 
 @app.post("/ia/router", response_model=RouterResponse)
 def router(request: MensagemRequest):
+    # 1. Roteamento Semantico via LLM (quando habilitada, configurada e responsiva)
+    resultado_llm = tentar_roteamento_llm(request)
+    if resultado_llm is not None:
+        return resultado_llm
+
+    # 2. Fallback Deterministico por Expressoes Regulares e Palavras-Chave
     mensagem = request.mensagem
     lang = detectar_idioma(mensagem)
     intent = detectar_intencao(mensagem)
